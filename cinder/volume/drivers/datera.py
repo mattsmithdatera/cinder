@@ -54,7 +54,7 @@ class DateraDriver(san.SanISCSIDriver):
     Version history:
         1.0 - Initial driver
     """
-    VERSION = '1.0'
+    VERSION = '1.2'
 
     def __init__(self, *args, **kwargs):
         super(DateraDriver, self).__init__(*args, **kwargs)
@@ -104,7 +104,7 @@ class DateraDriver(san.SanISCSIDriver):
         iscsi_portal = export['_ipColl'][0] + ':3260'
         iqn = export['targetIds'].itervalues().next()['ids'][0]['id']
 
-        provider_location = '%s %s %s' % (iscsi_portal, iqn, 1)
+        provider_location = '%s %s %s' % (iscsi_portal, iqn, 0)
         model_update = {'provider_location': provider_location}
         return model_update
 
