@@ -27,6 +27,7 @@ LOG = logging.getLogger(__name__)
 
 
 class DateraVolumeTestCase(test.TestCase):
+
     def setUp(self):
         super(DateraVolumeTestCase, self).setUp()
 
@@ -118,9 +119,9 @@ class DateraVolumeTestCase(test.TestCase):
         self.mock_api.side_effect = self._generate_fake_api_request()
         ctxt = context.get_admin_context()
         expected = {
-            'provider_location': '172.28.121.10:3260 iqn.2013-05.com.daterain'
-                                 'c::01:sn:fc372bc0490b2dbe 0'
-        }
+            'provider_location': '172.28.94.11:3260 iqn.2013-05.com.daterainc'
+                                 ':c20aba21-6ef6-446b-b374-45733b4883ba--ST--'
+                                 'storage-1:01:sn:34e5b20fbadd3abb 0'}
         self.assertEqual(expected, self.driver.ensure_export(ctxt,
                                                              self.volume))
 
@@ -135,9 +136,9 @@ class DateraVolumeTestCase(test.TestCase):
             targets_exist=False)
         ctxt = context.get_admin_context()
         expected = {
-            'provider_location': '172.28.121.10:3260 iqn.2013-05.com.daterainc'
-                                 '::01:sn:fc372bc0490b2dbe 0'
-        }
+            'provider_location': '172.28.94.11:3260 iqn.2013-05.com.daterainc'
+                                 ':c20aba21-6ef6-446b-b374-45733b4883ba--ST--'
+                                 'storage-1:01:sn:34e5b20fbadd3abb 0'}
 
         self.assertEqual(expected, self.driver.create_export(ctxt,
                                                              self.volume))
@@ -169,12 +170,12 @@ class DateraVolumeTestCase(test.TestCase):
 
     def test_create_snapshot_success(self):
         self.mock_api.return_value = {
-            u'uuid': u'0bb34f0c-fea4-48e0-bf96-591120ac7e3c',
-            u'parent': u'c20aba21-6ef6-446b-b374-45733b4883ba',
-            u'subType': u'IS_SNAPSHOT',
-            u'numReplicas': 2,
-            u'size': u'1073741824',
-            u'name': u'snapshot-00000001'
+            'uuid': '0bb34f0c-fea4-48e0-bf96-591120ac7e3c',
+            'parent': 'c20aba21-6ef6-446b-b374-45733b4883ba',
+            'subType': 'IS_SNAPSHOT',
+            'numReplicas': 2,
+            'size': '1073741824',
+            'name': 'snapshot-00000001'
         }
         snapshot = _stub_snapshot(volume_id=self.volume['id'])
         self.assertIsNone(self.driver.create_snapshot(snapshot))
@@ -186,19 +187,11 @@ class DateraVolumeTestCase(test.TestCase):
                           self.driver.create_snapshot, snapshot)
 
     def test_delete_snapshot_success(self):
-        self.mock_api.return_value = {
-            u'uuid': u'0bb34f0c-fea4-48e0-bf96-591120ac7e3c',
-            u'parent': u'c20aba21-6ef6-446b-b374-45733b4883ba',
-            u'subType': u'IS_SNAPSHOT',
-            u'numReplicas': 2,
-            u'size': u'1073741824',
-            u'name': u'snapshot-00000001'
-        }
         snapshot = _stub_snapshot(volume_id=self.volume['id'])
         self.assertIsNone(self.driver.delete_snapshot(snapshot))
 
     def test_delete_snapshot_not_found(self):
-        self.mock_api.side_effect = exception.NotFound
+        self.mock_api.side_effect = [_stub_snapshots, exception.NotFound]
         snapshot = _stub_snapshot(self.volume['id'])
         self.assertIsNone(self.driver.delete_snapshot(snapshot))
 
@@ -209,14 +202,7 @@ class DateraVolumeTestCase(test.TestCase):
                           self.driver.delete_snapshot, snapshot)
 
     def test_create_volume_from_snapshot_success(self):
-        self.mock_api.return_value = {
-            u'uuid': u'c20aba21-6ef6-446b-b374-45733b4883ba',
-            u'parent': u'0bb34f0c-fea4-48e0-bf96-591120ac7e3c',
-            u'subType': u'IS_ORIGINAL',
-            u'numReplicas': 2,
-            u'size': u'1073741824',
-            u'name': u'volume-00000001'
-        }
+        self.mock_api.side_effect = [_stub_snapshots, None]
         snapshot = _stub_snapshot(volume_id=self.volume['id'])
         self.assertIsNone(
             self.driver.create_volume_from_snapshot(self.volume, snapshot))
@@ -229,14 +215,6 @@ class DateraVolumeTestCase(test.TestCase):
                           snapshot)
 
     def test_extend_volume_success(self):
-        self.mock_api.return_value = {
-            u'uuid': u'c20aba21-6ef6-446b-b374-45733b4883ba',
-            u'parent': u'00000000-0000-0000-0000-000000000000',
-            u'subType': u'IS_ORIGINAL',
-            u'numReplicas': 2,
-            u'size': u'2147483648',
-            u'name': u'volume-00000001'
-        }
         volume = _stub_volume(size=1)
         self.assertIsNone(self.driver.extend_volume(volume, 2))
 
@@ -247,125 +225,159 @@ class DateraVolumeTestCase(test.TestCase):
                           self.driver.extend_volume, volume, 2)
 
     def _generate_fake_api_request(self, targets_exist=True):
-        fake_volume = None
-        if not targets_exist:
-            fake_volume = _stub_datera_volume(targets={})
-        else:
-            fake_volume = _stub_datera_volume()
-
         def _fake_api_request(resource_type, method='get', resource=None,
                               body=None, action=None, sensitive=False):
-            if resource_type == 'volumes' and action is None:
-                return fake_volume
-            elif resource_type == 'volume' and action == 'export':
-                return stub_create_export
-            elif resource_type == 'export_configs':
+            if resource_type.split('/')[-1] == 'storage-1':
                 return stub_get_export
-
+            elif resource_type == 'app_instances':
+                return stub_app_instance
+            elif resource_type.split('/')[-1] == 'c20aba21-6ef6-446b-b374-45733b4883ba':
+                return stub_app_instance[
+                    'c20aba21-6ef6-446b-b374-45733b4883ba']
         return _fake_api_request
 
 
 stub_create_export = {
-    u'_ipColl': [u'172.28.121.10', u'172.28.120.10'],
-    u'acls': {},
-    u'activeServers': {u'4594953e-f97f-e111-ad85-001e6738c0f0': u'1'},
-    u'ctype': u'TC_BLOCK_ISCSI',
-    u'endpointsExt1': {
-        u'4594953e-f97f-e111-ad85-001e6738c0f0': {
-            u'ipHigh': 0,
-            u'ipLow': u'192421036',
-            u'ipStr': u'172.28.120.11',
-            u'ipV': 4,
-            u'name': u'',
-            u'network': 24
+    "_ipColl": ["172.28.121.10", "172.28.120.10"],
+    "acls": {},
+    "activeServers": {"4594953e-f97f-e111-ad85-001e6738c0f0": "1"},
+    "ctype": "TC_BLOCK_ISCSI",
+    "endpointsExt1": {
+        "4594953e-f97f-e111-ad85-001e6738c0f0": {
+            "ipHigh": 0,
+            "ipLow": "192421036",
+            "ipStr": "172.28.120.11",
+            "ipV": 4,
+            "name": "",
+            "network": 24
         }
     },
-    u'endpointsExt2': {
-        u'4594953e-f97f-e111-ad85-001e6738c0f0': {
-            u'ipHigh': 0,
-            u'ipLow': u'192486572',
-            u'ipStr': u'172.28.121.11',
-            u'ipV': 4,
-            u'name': u'',
-            u'network': 24
+    "endpointsExt2": {
+        "4594953e-f97f-e111-ad85-001e6738c0f0": {
+            "ipHigh": 0,
+            "ipLow": "192486572",
+            "ipStr": "172.28.121.11",
+            "ipV": 4,
+            "name": "",
+            "network": 24
         }
     },
-    u'inodes': {u'c20aba21-6ef6-446b-b374-45733b4883ba': u'1'},
-    u'name': u'',
-    u'networkPort': 0,
-    u'serverAllocation': u'TS_ALLOC_COMPLETED',
-    u'servers': {u'4594953e-f97f-e111-ad85-001e6738c0f0': u'1'},
-    u'targetAllocation': u'TS_ALLOC_COMPLETED',
-    u'targetIds': {
-        u'4594953e-f97f-e111-ad85-001e6738c0f0': {
-            u'ids': [{
-                u'dev': None,
-                u'id': u'iqn.2013-05.com.daterainc::01:sn:fc372bc0490b2dbe'
-            }]
-        }
-    },
-    u'typeName': u'TargetIscsiConfig',
-    u'uuid': u'7071efd7-9f22-4996-8f68-47e9ab19d0fd'
-}
-
-stub_get_export = {
-    "uuid": "744e1bd8-d741-4919-86cd-806037d98c8a",
-    "active_initiators": [],
-    "active_servers": [
-        "472764aa-584b-4c1d-a7b7-e50cf7f5518f"
-    ],
-    "endpoint_addrs": [
-        "172.28.121.10",
-        "172.28.120.10"
-    ],
-    "endpoint_idents": [
-        "iqn.2013-05.com.daterainc::01:sn:fc372bc0490b2dbe"
-    ],
-    "initiators": [],
-    "servers": [
-        "472764aa-584b-4c1d-a7b7-e50cf7f5518f"
-    ],
-    "volumes": [
-        "10305aa4-1343-4363-86fe-f49eb421a48c"
-    ],
-    "type": "iscsi",
-    "creation_type": "system_explicit",
-    "server_allocation": "TS_ALLOC_COMPLETED",
-    "admin_state": "online",
-    "target_allocation": "TS_ALLOC_COMPLETED",
-    "atype": "none",
-    "name": "OS-10305aa4",
+    "inodes": {"c20aba21-6ef6-446b-b374-45733b4883ba": "1"},
+    "name": "",
+    "networkPort": 0,
+    "serverAllocation": "TS_ALLOC_COMPLETED",
+    "servers": {"4594953e-f97f-e111-ad85-001e6738c0f0": "1"},
+    "targetAllocation": "TS_ALLOC_COMPLETED",
     "targetIds": {
-        "472764aa-584b-4c1d-a7b7-e50cf7f5518f": {
+        "4594953e-f97f-e111-ad85-001e6738c0f0": {
             "ids": [{
-                "dev": "",
-                "id": ("iqn.2013-05.com.daterainc::01:sn:fc372bc0490b2dbe")
+                "dev": None,
+                "id": "iqn.2013-05.com.daterainc::01:sn:fc372bc0490b2dbe"
             }]
         }
+    },
+    "typeName": "TargetIscsiConfig",
+    "uuid": "7071efd7-9f22-4996-8f68-47e9ab19d0fd"
+}
+
+_stub_snapshots = {
+    "1445384931.322468627": {
+        "op_state": "available",
+        "path": "/app_instances/c20aba21-6ef6-446b"
+                "-b374-45733b4883ba/storage_instances"
+                "/storage-1/volumes/volume-1/snapshots"
+                "/1445384931.322468627",
+        "uuid": "0bb34f0c-fea4-48e0-bf96-591120ac7e3c"
     }
 }
 
 
-def _stub_datera_volume(*args, **kwargs):
-    return {
-        "status": "available",
-        "name": "test",
-        "num_replicas": "2",
-        "parent": "00000000-0000-0000-0000-000000000000",
-        "size": "1024",
-        "sub_type": "IS_ORIGINAL",
-        "uuid": "10305aa4-1343-4363-86fe-f49eb421a48c",
-        "snapshots": [],
-        "snapshot_configs": [],
-        "targets": [
-            kwargs.get('targets', "744e1bd8-d741-4919-86cd-806037d98c8a"),
-        ]
+stub_app_instance = {
+    "c20aba21-6ef6-446b-b374-45733b4883ba": {
+        "admin_state": "online",
+        "clone_src": {},
+        "create_mode": "openstack",
+        "descr": "",
+        "health": "ok",
+        "name": "c20aba21-6ef6-446b-b374-45733b4883ba",
+        "path": "/app_instances/c20aba21-6ef6-446b-b374-45733b4883ba",
+        "storage_instances": {
+            "storage-1": {
+                "access": {
+                    "ips": [
+                        "172.28.94.11"
+                    ],
+                    "iqn": "iqn.2013-05.com.daterainc:c20aba21-6ef6-446b-"
+                           "b374-45733b4883ba--ST--storage-1:01:sn:"
+                           "34e5b20fbadd3abb",
+                    "path": "/app_instances/c20aba21-6ef6-446b-b374"
+                            "-45733b4883ba/storage_instances/storage-1/access"
+                },
+                "access_control": {
+                    "initiator_groups": [],
+                    "initiators": [],
+                    "path": "/app_instances/c20aba21-6ef6-446b-b374-"
+                            "45733b4883ba/storage_instances/storage-1"
+                            "/access_control"
+                },
+                "access_control_mode": "allow_all",
+                "active_initiators": [],
+                "active_storage_nodes": [
+                    "/storage_nodes/1c4feac4-17c7-478b-8928-c76e8ec80b72"
+                ],
+                "admin_state": "online",
+                "auth": {
+                    "initiator_pswd": "",
+                    "initiator_user_name": "",
+                    "path": "/app_instances/c20aba21-6ef6-446b-b374-"
+                            "45733b4883ba/storage_instances/storage-1/auth",
+                    "target_pswd": "",
+                    "target_user_name": "",
+                    "type": "none"
+                },
+                "creation_type": "user",
+                "descr": "c20aba21-6ef6-446b-b374-45733b4883ba__ST__storage-1",
+                "name": "storage-1",
+                "path": "/app_instances/c20aba21-6ef6-446b-b374-45733b4883ba/storage_instances/storage-1",
+                "uuid": "b9897b84-149f-43c7-b19c-27d6af8fa815",
+                "volumes": {
+                    "volume-1": {
+                        "capacity_in_use": 0,
+                        "name": "volume-1",
+                        "op_state": "available",
+                        "path": "/app_instances/c20aba21-6ef6-446b-b374-"
+                                "45733b4883ba/storage_instances/storage-1"
+                                "/volumes/volume-1",
+                        "replica_count": 3,
+                        "size": 500,
+                        "snapshot_policies": {},
+                        "snapshots": {
+                            "1445384931.322468627": {
+                                "op_state": "available",
+                                "path": "/app_instances/c20aba21-6ef6-446b"
+                                        "-b374-45733b4883ba/storage_instances"
+                                        "/storage-1/volumes/volume-1/snapshots"
+                                        "/1445384931.322468627",
+                                "uuid": "0bb34f0c-fea4-48e0-bf96-591120ac7e3c"
+                            }
+                        },
+                        "uuid": "c20aba21-6ef6-446b-b374-45733b4883ba"
+                    }
+                }
+            }
+        },
+        "uuid": "c20aba21-6ef6-446b-b374-45733b4883ba"
     }
+}
+
+
+stub_get_export = stub_app_instance[
+    'c20aba21-6ef6-446b-b374-45733b4883ba']['storage_instances']['storage-1']
 
 
 def _stub_volume(*args, **kwargs):
-    uuid = u'c20aba21-6ef6-446b-b374-45733b4883ba'
-    name = u'volume-00000001'
+    uuid = 'c20aba21-6ef6-446b-b374-45733b4883ba'
+    name = 'volume-00000001'
     size = 1
     volume = {}
     volume['id'] = kwargs.get('id', uuid)
@@ -376,8 +388,8 @@ def _stub_volume(*args, **kwargs):
 
 
 def _stub_snapshot(*args, **kwargs):
-    uuid = u'0bb34f0c-fea4-48e0-bf96-591120ac7e3c'
-    name = u'snapshot-00000001'
+    uuid = '0bb34f0c-fea4-48e0-bf96-591120ac7e3c'
+    name = 'snapshot-00000001'
     volume = {}
     volume['id'] = kwargs.get('id', uuid)
     volume['display_name'] = kwargs.get('display_name', name)
