@@ -195,16 +195,7 @@ class DateraDriver(san.SanISCSIDriver):
 
     def ensure_export(self, context, volume):
         """Gets the associated account, retrieves CHAP info and updates."""
-        storage_instance = self._issue_api_request(
-            'app_instances/{}/storage_instances/{}'.format(
-                volume['id'], DEFAULT_STORAGE_NAME))
-
-        portal = storage_instance['access']['ips'][0] + ':3260'
-        iqn = storage_instance['access']['iqn']
-
-        # Portal, IQN, LUNID
-        provider_location = '%s %s %s' % (portal, iqn, self._get_lunid())
-        return {'provider_location': provider_location}
+        return self.create_export(context, volume)
 
     def create_export(self, context, volume):
         url = "app_instances/{}".format(volume['id'])
