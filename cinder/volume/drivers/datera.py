@@ -183,6 +183,7 @@ class DateraDriver(san.SanISCSIDriver):
         self._issue_api_request('app_instances', 'post', body=data)
 
     def delete_volume(self, volume):
+        self.detach_volume(None, volume)
         app_inst = volume['id']
         try:
             self._issue_api_request('app_instances/{}'.format(app_inst),
@@ -224,7 +225,8 @@ class DateraDriver(san.SanISCSIDriver):
     def detach_volume(self, context, volume):
         url = "app_instances/{}".format(volume['id'])
         data = {
-            'admin_state': 'offline'
+            'admin_state': 'offline',
+            'force': True
         }
         try:
             self._issue_api_request(url, method='put', body=data)
@@ -382,6 +384,8 @@ class DateraDriver(san.SanISCSIDriver):
             connection_string += '/%s' % action
 
         LOG.debug("Endpoint for Datera API call: %s", connection_string)
+        LOG.debug("Payload for Datera API call: header: {}, payload: {}"
+                  "cert {}".format(header, payload, cert_data))
         try:
             response = getattr(requests, method)(connection_string,
                                                  data=payload, headers=header,
@@ -400,6 +404,8 @@ class DateraDriver(san.SanISCSIDriver):
             print(vars(response))
             if response.status_code == 404:
                 raise exception.NotFound(data['message'])
+            elif response.status_code in [403, 401]:
+                raise exception.NotAuthorized()
             else:
                 msg = _('Request to Datera cluster returned bad status:'
                         ' %(status)s | %(reason)s') % {
