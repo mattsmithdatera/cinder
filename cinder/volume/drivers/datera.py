@@ -128,6 +128,7 @@ class DateraDriver(san.SanISCSIDriver):
                 'create_mode': "openstack",
                 'uuid': str(volume['id']),
                 'name': str(volume['id']),
+                'access_control_mode': 'allow_all',
                 'storage_instances': [
                     {
                         'name': DEFAULT_STORAGE_NAME,
