@@ -273,7 +273,7 @@ class DateraDriver(san.SanISCSIDriver):
         for ts, snap in snapshots.viewitems():
             if snap['uuid'] == snapshot['id']:
                 found_ts = ts
-                print(found_ts)
+                LOG.debug(_(found_ts))
                 break
         else:
             raise exception.NotFound
@@ -391,9 +391,9 @@ class DateraDriver(san.SanISCSIDriver):
         data = response.json()
         LOG.debug("Results of Datera API call: %s", data)
         if not response.ok:
-            print(response.url)
-            print(payload)
-            print(vars(response))
+            LOG.debug(_(response.url))
+            LOG.debug(_(payload))
+            LOG.debug(_(vars(response)))
             if response.status_code == 404:
                 raise exception.NotFound(data['message'])
             elif response.status_code in [403, 401]:
