@@ -345,7 +345,6 @@ class DateraDriver(san.SanISCSIDriver):
         for ts, snap in snapshots.viewitems():
             if snap['uuid'] == snapshot['id']:
                 found_ts = ts
-                print(found_ts)
                 break
         else:
             raise exception.NotFound
