@@ -104,6 +104,30 @@ class DateraDriver(san.SanISCSIDriver):
         self.auth_token = None
         self.cluster_stats = {}
 
+    def _login(self):
+        """Use the san_login and san_password to set self.auth_token."""
+        body = {
+            'name': self.username,
+            'password': self.password
+        }
+
+        # Unset token now, otherwise potential expired token will be sent
+        # along to be used for authorization when trying to login.
+        self.auth_token = None
+
+        try:
+            LOG.debug('Getting Datera auth token.')
+            results = self._issue_api_request('login', 'put', body=body,
+                                              sensitive=True)
+            self.auth_token = results['key']
+            self.configuration.datera_api_token = results['key']
+        except exception.NotAuthorized:
+            with excutils.save_and_reraise_exception():
+                LOG.error(_LE('Logging into the Datera cluster failed. Please '
+                              'check your username and password set in the '
+                              'cinder.conf and start the cinder-volume'
+                              'service again.'))
+
     def _get_lunid(self):
         return 0
 
@@ -170,11 +194,15 @@ class DateraDriver(san.SanISCSIDriver):
 
     def create_volume(self, volume):
         """Create a logical volume."""
+        # Generate App Instance, Storage Instance and Volume
+        # Volume ID will be used as the App Instance Name
+        # Storage Instance and Volumes will have standard names
         app_params = \
             {
                 'create_mode': "openstack",
                 'uuid': str(volume['id']),
                 'name': str(volume['id']),
+                'access_control_mode': 'allow_all',
                 'storage_instances': [
                     {
                         'name': DEFAULT_STORAGE_NAME,
@@ -191,6 +219,28 @@ class DateraDriver(san.SanISCSIDriver):
                 ]
             }
         self._create_resource(volume, 'app_instances', body=app_params)
+
+    def extend_volume(self, volume, new_size):
+        # Offline App Instance, if necessary
+        reonline = False
+        app_inst = self._issue_api_request(
+            "app_instances/{}".format(volume['id']))
+        if app_inst['admin_state'] == 'online':
+            reonline = True
+            self.detach_volume(None, volume)
+        # Change Volume Size
+        app_inst = volume['id']
+        storage_inst = DEFAULT_STORAGE_NAME
+        data = {
+            'size': new_size
+        }
+        self._issue_api_request(
+            'app_instances/{}/storage_instances/{}/volumes/{}'.format(
+                app_inst, storage_inst, DEFAULT_VOLUME_NAME),
+            method='put', body=data)
+        # Online Volume, if it was online before
+        if reonline:
+            self.create_export(None, volume)
 
     def create_cloned_volume(self, volume, src_vref):
         clone_src_template = "/app_instances/{}/storage_instances/{" + \
@@ -218,16 +268,7 @@ class DateraDriver(san.SanISCSIDriver):
 
     def ensure_export(self, context, volume):
         """Gets the associated account, retrieves CHAP info and updates."""
-        storage_instance = self._issue_api_request(
-            'app_instances/{}/storage_instances/{}'.format(
-                volume['id'], DEFAULT_STORAGE_NAME))
-
-        portal = storage_instance['access']['ips'][0] + ':3260'
-        iqn = storage_instance['access']['iqn']
-
-        # Portal, IQN, LUNID
-        provider_location = '%s %s %s' % (portal, iqn, self._get_lunid())
-        return {'provider_location': provider_location}
+        return self.create_export(context, volume)
 
     def create_export(self, context, volume):
         url = "app_instances/{}".format(volume['id'])
@@ -248,7 +289,8 @@ class DateraDriver(san.SanISCSIDriver):
     def detach_volume(self, context, volume, attachment=None):
         url = "app_instances/{}".format(volume['id'])
         data = {
-            'admin_state': 'offline'
+            'admin_state': 'offline',
+            'force': True
         }
         try:
             self._issue_api_request(url, method='put', body=data)
@@ -324,28 +366,6 @@ class DateraDriver(san.SanISCSIDriver):
             }
         self._issue_api_request('app_instances', method='post', body=app_params)
 
-    def extend_volume(self, volume, new_size):
-        # Offline App Instance, if necessary
-        reonline = False
-        app_inst = self._issue_api_request(
-            "app_instances/{}".format(volume['id']))
-        if app_inst['admin_state'] == 'online':
-            reonline = True
-            self.detach_volume(None, volume)
-        # Change Volume Size
-        app_inst = volume['id']
-        storage_inst = DEFAULT_STORAGE_NAME
-        data = {
-            'size': new_size
-        }
-        self._issue_api_request(
-            'app_instances/{}/storage_instances/{}/volumes/{}'.format(
-                app_inst, storage_inst, DEFAULT_VOLUME_NAME),
-            method='put', body=data)
-        # Online Volume, if it was online before
-        if reonline:
-            self.create_export(None, volume)
-
     def get_volume_stats(self, refresh=False):
         """Get volume stats.
 
@@ -382,30 +402,6 @@ class DateraDriver(san.SanISCSIDriver):
         }
 
         self.cluster_stats = stats
-
-    def _login(self):
-        """Use the san_login and san_password to set self.auth_token."""
-        body = {
-            'name': self.username,
-            'password': self.password
-        }
-
-        # Unset token now, otherwise potential expired token will be sent
-        # along to be used for authorization when trying to login.
-        self.auth_token = None
-
-        try:
-            LOG.debug('Getting Datera auth token.')
-            results = self._issue_api_request('login', 'put', body=body,
-                                              sensitive=True)
-            self.auth_token = results['key']
-            self.configuration.datera_api_token = results['key']
-        except exception.NotAuthorized:
-            with excutils.save_and_reraise_exception():
-                LOG.error(_LE('Logging into the Datera cluster failed. Please '
-                              'check your username and password set in the '
-                              'cinder.conf and start the cinder-volume'
-                              'service again.'))
 
     def _get_policies_by_volume_type(self, type_id):
         """Get extra_specs and qos_specs of a volume_type.
@@ -498,9 +494,9 @@ class DateraDriver(san.SanISCSIDriver):
             LOG.debug(_LI("Results of Datera API call: {}".format(data)))
 
         if not response.ok:
-            print(response.url)
-            print(payload)
-            print(vars(response))
+            LOG.debug(_(response.url))
+            LOG.debug(_(payload))
+            LOG.debug(_(vars(response)))
             if response.status_code == 404:
                 raise exception.NotFound(data['message'])
             elif response.status_code in [403, 401]:
