@@ -266,11 +266,11 @@ class DateraDriver(san.SanISCSIDriver):
                       "Datera cluster. Continuing with delete.")
             LOG.info(msg, volume['id'])
 
-    def ensure_export(self, context, volume):
+    def ensure_export(self, context, volume, connector):
         """Gets the associated account, retrieves CHAP info and updates."""
         return self.create_export(context, volume)
 
-    def create_export(self, context, volume):
+    def create_export(self, context, volume, connector):
         url = "app_instances/{}".format(volume['id'])
         data = {
             'admin_state': 'online'
