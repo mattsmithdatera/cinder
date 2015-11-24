@@ -257,6 +257,7 @@ class DateraDriver(san.SanISCSIDriver):
         self._issue_api_request('app_instances', 'post', body=data)
 
     def delete_volume(self, volume):
+        self.detach_volume(None, volume)
         app_inst = volume['id']
         try:
             self._issue_api_request('app_instances/{}'.format(app_inst),
