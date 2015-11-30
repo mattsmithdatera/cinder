@@ -269,7 +269,7 @@ class DateraDriver(san.SanISCSIDriver):
 
     def ensure_export(self, context, volume, connector):
         """Gets the associated account, retrieves CHAP info and updates."""
-        return self.create_export(context, volume)
+        return self.create_export(context, volume, connector)
 
     def create_export(self, context, volume, connector):
         url = "app_instances/{}".format(volume['id'])
