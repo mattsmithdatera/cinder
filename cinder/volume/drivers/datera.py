@@ -171,11 +171,6 @@ class DateraDriver(san.SanISCSIDriver):
 
     def _create_resource(self, resource, resource_type, body):
         type_id = resource.get('volume_type_id', None)
-        if resource_type == 'app_instances':
-            if type_id is not None:
-                policies = self._get_policies_by_volume_type(type_id)
-                if policies:
-                    body.update(policies)
 
         result = None
         try:
@@ -187,6 +182,17 @@ class DateraDriver(san.SanISCSIDriver):
                               "entered correctly."))
             raise
         else:
+            # Handle updating QOS Policies
+            if resource_type == 'app_instances':
+                url = 'app_instances/{}/storage_instances/{}/volumes/{' + \
+                      '}/performance_policy'.format(
+                          resource['id'],
+                          DEFAULT_STORAGE_NAME,
+                          DEFAULT_VOLUME_NAME)
+                if type_id is not None:
+                    policies = self._get_policies_by_volume_type(type_id)
+                    if policies:
+                        self._issue_api_request(url, 'put', body=policies)
             if result['storage_instances'][DEFAULT_STORAGE_NAME]['volumes'][
                     DEFAULT_VOLUME_NAME]['op_state'] == 'available':
                 return
