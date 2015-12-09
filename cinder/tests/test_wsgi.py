@@ -18,6 +18,7 @@
 
 import mock
 import os.path
+import ssl
 import tempfile
 import urllib2
 
@@ -35,6 +36,21 @@ CONF = cfg.CONF
 
 TEST_VAR_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__),
                                'var'))
+
+
+def open_no_proxy(*args, **kwargs):
+    # NOTE(coreycb):
+    # Deal with more secure certification chain verficiation
+    # introduced in python 2.7.9 under PEP-0476
+    # https://github.com/python/peps/blob/master/pep-0476.txt
+    if hasattr(ssl, "_create_unverified_context"):
+        opener = urllib2.build_opener(
+            urllib2.ProxyHandler({}),
+            urllib2.HTTPSHandler(context=ssl._create_unverified_context())
+        )
+    else:
+        opener = urllib2.build_opener(urllib2.ProxyHandler({}))
+    return opener.open(*args, **kwargs)
 
 
 class TestLoaderNothingExists(test.TestCase):
@@ -142,7 +158,7 @@ class TestWSGIServer(test.TestCase):
         server = cinder.wsgi.Server("test_app", hello_world)
         server.start()
 
-        response = urllib2.urlopen('http://127.0.0.1:%d/' % server.port)
+        response = open_no_proxy('http://127.0.0.1:%d/' % server.port)
         self.assertEqual(greetings, response.read())
 
         server.stop()
@@ -162,7 +178,7 @@ class TestWSGIServer(test.TestCase):
         server = cinder.wsgi.Server("test_app", hello_world)
         server.start()
 
-        response = urllib2.urlopen('https://127.0.0.1:%d/' % server.port)
+        response = open_no_proxy('https://127.0.0.1:%d/' % server.port)
         self.assertEqual(greetings, response.read())
 
         server.stop()
@@ -187,7 +203,7 @@ class TestWSGIServer(test.TestCase):
                                     port=0)
         server.start()
 
-        response = urllib2.urlopen('https://[::1]:%d/' % server.port)
+        response = open_no_proxy('https://[::1]:%d/' % server.port)
         self.assertEqual(greetings, response.read())
 
         server.stop()

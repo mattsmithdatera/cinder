@@ -67,7 +67,12 @@ rbd_opts = [
                default=5,
                help='maximum number of nested clones that can be taken of a '
                     'volume before enforcing a flatten prior to next clone. '
-                    'A value of zero disables cloning')]
+                    'A value of zero disables cloning'),
+    cfg.IntOpt('rados_connect_timeout', default=-1,
+               help=_('Timeout value (in seconds) used when connecting to '
+                      'ceph cluster. If value < 0, no timeout is set and '
+                      'default librados value is used.'))]
+
 
 CONF = cfg.CONF
 CONF.register_opts(rbd_opts)
@@ -280,7 +285,11 @@ class RBDDriver(driver.VolumeDriver):
         ascii_conf = ascii_str(self.configuration.rbd_ceph_conf)
         client = self.rados.Rados(rados_id=ascii_user, conffile=ascii_conf)
         try:
-            client.connect()
+            if self.configuration.rados_connect_timeout >= 0:
+                client.connect(
+                    timeout=self.configuration.rados_connect_timeout)
+            else:
+                client.connect()
             pool_to_open = str(pool or self.configuration.rbd_pool)
             ioctx = client.open_ioctx(pool_to_open)
             return client, ioctx
@@ -517,17 +526,13 @@ class RBDDriver(driver.VolumeDriver):
         if int(volume['size']):
             self._resize(volume)
 
-    def _delete_backup_snaps(self, client, volume_name):
-        rbd_image = self.rbd.Image(client.ioctx, volume_name)
-        try:
-            backup_snaps = self._get_backup_snaps(rbd_image)
-            if backup_snaps:
-                for snap in backup_snaps:
-                    rbd_image.remove_snap(snap['name'])
-            else:
-                LOG.debug(_("volume has no backup snaps"))
-        finally:
-            rbd_image.close()
+    def _delete_backup_snaps(self, rbd_image):
+        backup_snaps = self._get_backup_snaps(rbd_image)
+        if backup_snaps:
+            for snap in backup_snaps:
+                rbd_image.remove_snap(snap['name'])
+        else:
+            LOG.debug(_("volume has no backup snaps"))
 
     def _get_clone_info(self, volume, volume_name, snap=None):
         """If volume is a clone, return its parent info.
@@ -601,7 +606,7 @@ class RBDDriver(driver.VolumeDriver):
             parent = None
 
             # Ensure any backup snapshots are deleted
-            self._delete_backup_snaps(client, volume_name)
+            self._delete_backup_snaps(rbd_image)
 
             # If the volume has non-clone snapshots this delete is expected to
             # raise VolumeIsBusy so do so straight away.
@@ -638,6 +643,11 @@ class RBDDriver(driver.VolumeDriver):
                     # Now raise this so that volume stays available so that we
                     # delete can be retried.
                     raise exception.VolumeIsBusy(msg, volume_name=volume_name)
+                except self.rbd.ImageNotFound:
+                    msg = (_("RBD volume %s not found, allowing delete "
+                             "operation to proceed.") % volume_name)
+                    LOG.info(msg)
+                    return
 
                 # If it is a clone, walk back up the parent chain deleting
                 # references.
