@@ -151,7 +151,7 @@ class DateraDriver(san.SanISCSIDriver):
         # Offline App Instance, if necessary
         reonline = False
         app_inst = self._issue_api_request(
-            "app_instances/{}".format(volume['id']))
+            "app_instances/{0}".format(volume['id']))
         if app_inst['admin_state'] == 'online':
             reonline = True
             self.detach_volume(None, volume)
@@ -162,7 +162,7 @@ class DateraDriver(san.SanISCSIDriver):
             'size': new_size
         }
         self._issue_api_request(
-            'app_instances/{}/storage_instances/{}/volumes/{}'.format(
+            'app_instances/{0}/storage_instances/{1}/volumes/{2}'.format(
                 app_inst, storage_inst, DEFAULT_VOLUME_NAME),
             method='put', body=data)
         # Online Volume, if it was online before
@@ -170,8 +170,8 @@ class DateraDriver(san.SanISCSIDriver):
             self.create_export(None, volume)
 
     def create_cloned_volume(self, volume, src_vref):
-        clone_src_template = "/app_instances/{}/storage_instances/{" + \
-                             "}/volumes/{}"
+        clone_src_template = "/app_instances/{0}/storage_instances/{1" + \
+                             "}/volumes/{2}"
         src = clone_src_template.format(src_vref['id'], DEFAULT_STORAGE_NAME,
                                         DEFAULT_VOLUME_NAME)
         data = {
@@ -187,7 +187,7 @@ class DateraDriver(san.SanISCSIDriver):
         self.detach_volume(None, volume)
         app_inst = volume['id']
         try:
-            self._issue_api_request('app_instances/{}'.format(app_inst),
+            self._issue_api_request('app_instances/{0}'.format(app_inst),
                                     method='delete')
         except exception.NotFound:
             msg = _("Tried to delete volume %s, but it was not found in the "
@@ -199,7 +199,7 @@ class DateraDriver(san.SanISCSIDriver):
         return self.create_export(context, volume)
 
     def create_export(self, context, volume):
-        url = "app_instances/{}".format(volume['id'])
+        url = "app_instances/{0}".format(volume['id'])
         data = {
             'admin_state': 'online'
         }
@@ -215,7 +215,7 @@ class DateraDriver(san.SanISCSIDriver):
         return {'provider_location': provider_location}
 
     def detach_volume(self, context, volume):
-        url = "app_instances/{}".format(volume['id'])
+        url = "app_instances/{0}".format(volume['id'])
         data = {
             'admin_state': 'offline',
             'force': True
@@ -228,7 +228,7 @@ class DateraDriver(san.SanISCSIDriver):
             LOG.info(msg, volume['id'])
 
     def create_snapshot(self, snapshot):
-        url_template = 'app_instances/{}/storage_instances/{}/volumes/{' \
+        url_template = 'app_instances/{0}/storage_instances/{1}/volumes/{2' \
                        '}/snapshots'
         url = url_template.format(snapshot['volume_id'],
                                   DEFAULT_STORAGE_NAME,
@@ -240,8 +240,8 @@ class DateraDriver(san.SanISCSIDriver):
         self._issue_api_request(url, method='post', body=snap_params)
 
     def delete_snapshot(self, snapshot):
-        snap_temp = 'app_instances/{}/storage_instances/{}/volumes/{' \
-                    '}/snapshots'
+        snap_temp = 'app_instances/{0}/storage_instances/{1}/volumes/{2' \
+            '}/snapshots'
         snapu = snap_temp.format(snapshot['volume_id'],
                                  DEFAULT_STORAGE_NAME,
                                  DEFAULT_VOLUME_NAME)
@@ -249,9 +249,9 @@ class DateraDriver(san.SanISCSIDriver):
         snapshots = self._issue_api_request(snapu, method='get')
 
         try:
-            for ts, snap in snapshots.viewitems():
+            for ts, snap in snapshots.iteritems():
                 if snap['uuid'] == snapshot['id']:
-                    url_template = snapu + '/{}'
+                    url_template = snapu + '/{0}'
                     url = url_template.format(ts)
                     self._issue_api_request(url, method='delete')
                     break
@@ -263,14 +263,14 @@ class DateraDriver(san.SanISCSIDriver):
             LOG.info(msg, snapshot['id'])
 
     def create_volume_from_snapshot(self, volume, snapshot):
-        snap_temp = 'app_instances/{}/storage_instances/{}/volumes/{' \
+        snap_temp = 'app_instances/{0}/storage_instances/{1}/volumes/{2' \
                     '}/snapshots'
         snapu = snap_temp.format(snapshot['volume_id'],
                                  DEFAULT_STORAGE_NAME,
                                  DEFAULT_VOLUME_NAME)
 
         snapshots = self._issue_api_request(snapu, method='get')
-        for ts, snap in snapshots.viewitems():
+        for ts, snap in snapshots.iteritems():
             if snap['uuid'] == snapshot['id']:
                 found_ts = ts
                 LOG.debug(_(found_ts))
@@ -278,8 +278,8 @@ class DateraDriver(san.SanISCSIDriver):
         else:
             raise exception.NotFound
 
-        src = '/app_instances/{}/storage_instances/{}/volumes/{' \
-            '}/snapshots/{}'.format(
+        src = '/app_instances/{0}/storage_instances/{1}/volumes/{2' \
+            '}/snapshots/{3}'.format(
                 snapshot['volume_id'],
                 DEFAULT_STORAGE_NAME,
                 DEFAULT_VOLUME_NAME,
@@ -376,8 +376,8 @@ class DateraDriver(san.SanISCSIDriver):
             connection_string += '/%s' % action
 
         LOG.debug("Endpoint for Datera API call: %s", connection_string)
-        LOG.debug("Payload for Datera API call: header: {}, payload: {}"
-                  "cert {}".format(header, payload, cert_data))
+        LOG.debug("Payload for Datera API call: header: {0}, payload: {1}"
+                  "cert {2}".format(header, payload, cert_data))
         try:
             response = getattr(requests, method)(connection_string,
                                                  data=payload, headers=header,
