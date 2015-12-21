@@ -62,26 +62,26 @@ DEFAULT_VOLUME_NAME = 'volume-1'
 
 
 def _authenticated(func):
-        """Ensure the driver is authenticated to make a request.
+    """Ensure the driver is authenticated to make a request.
 
-        In do_setup() we fetch an auth token and store it. If that expires when
-        we do API request, we'll fetch a new one.
-        """
+    In do_setup() we fetch an auth token and store it. If that expires when
+    we do API request, we'll fetch a new one.
+    """
 
-        def func_wrapper(self, *args, **kwargs):
-            try:
-                return func(self, *args, **kwargs)
-            except exception.NotAuthorized:
-                # Prevent recursion loop. After the self arg is the
-                # resource_type arg from _issue_api_request(). If attempt to
-                # login failed, we should just give up.
-                if args[0] == 'login':
-                    raise
+    def func_wrapper(self, *args, **kwargs):
+        try:
+            return func(self, *args, **kwargs)
+        except exception.NotAuthorized:
+            # Prevent recursion loop. After the self arg is the
+            # resource_type arg from _issue_api_request(). If attempt to
+            # login failed, we should just give up.
+            if args[0] == 'login':
+                raise
 
-                # Token might've expired, get a new one, try again.
-                self._login()
-                return func(self, *args, **kwargs)
-        return func_wrapper
+            # Token might've expired, get a new one, try again.
+            self._login()
+            return func(self, *args, **kwargs)
+    return func_wrapper
 
 
 class DateraDriver(san.SanISCSIDriver):
@@ -185,10 +185,11 @@ class DateraDriver(san.SanISCSIDriver):
             # Handle updating QOS Policies
             if resource_type == 'app_instances':
                 url = 'app_instances/{}/storage_instances/{}/volumes/{' + \
-                      '}/performance_policy'.format(
-                          resource['id'],
-                          DEFAULT_STORAGE_NAME,
-                          DEFAULT_VOLUME_NAME)
+                      '}/performance_policy'
+                url = url.format(
+                    resource['id'],
+                    DEFAULT_STORAGE_NAME,
+                    DEFAULT_VOLUME_NAME)
                 if type_id is not None:
                     policies = self._get_policies_by_volume_type(type_id)
                     if policies:
@@ -370,7 +371,10 @@ class DateraDriver(san.SanISCSIDriver):
                 'clone_src': src,
                 'access_control_mode': 'allow_all'
             }
-        self._issue_api_request('app_instances', method='post', body=app_params)
+        self._issue_api_request(
+            'app_instances',
+            method='post',
+            body=app_params)
 
     def get_volume_stats(self, refresh=False):
         """Get volume stats.
@@ -490,8 +494,10 @@ class DateraDriver(san.SanISCSIDriver):
                                                  data=payload, headers=header,
                                                  verify=False, cert=cert_data)
         except requests.exceptions.RequestException as ex:
-            msg = _LE('Failed to make a request to Datera cluster endpoint due '
-                      'to the following reason: %s') % six.text_type(ex.message)
+            msg = _LE(
+                'Failed to make a request to Datera cluster endpoint due '
+                'to the following reason: %s') % six.text_type(
+                ex.message)
             LOG.error(msg)
             raise exception.DateraAPIException(msg)
 
