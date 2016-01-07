@@ -193,7 +193,7 @@ class DateraDriver(san.SanISCSIDriver):
                 if type_id is not None:
                     policies = self._get_policies_by_volume_type(type_id)
                     if policies:
-                        self._issue_api_request(url, 'put', body=policies)
+                        self._issue_api_request(url, 'post', body=policies)
             if result['storage_instances'][DEFAULT_STORAGE_NAME]['volumes'][
                     DEFAULT_VOLUME_NAME]['op_state'] == 'available':
                 return
