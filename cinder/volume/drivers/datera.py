@@ -154,6 +154,7 @@ class DateraDriver(san.SanISCSIDriver):
             }
         self._issue_api_request('app_instances', method='post',
                                 body=app_params)
+        self.create_export(None, volume)
 
     def extend_volume(self, volume, new_size):
         # Offline App Instance, if necessary
