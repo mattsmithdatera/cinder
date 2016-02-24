@@ -1,0 +1,16 @@
+---
+prelude: >
+    Updating the Datera DataFabric volume driver to API v2
+features:
+  - All Datera DataFabric backed volume-types will now use
+    API version 2 with Datera DataFabric
+upgrade:
+  - This update is required to use the Datera DataFabric
+    versions 1.0+ as a volume driver in OpenStack.  Versions
+    before 1.0 will not be able to utilize this new driver
+    since they still function on v1 of the Datera DataFabric
+    API
+deprecations:
+  - Deprecated driver configuration options:
+      - datera_api_token -- this has been replaced by
+        san_login and san_password
