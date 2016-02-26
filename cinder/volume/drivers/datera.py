@@ -151,9 +151,9 @@ class DateraDriver(san.SanISCSIDriver):
         # If we can't authenticate through the old and new method, just fail
         # now.
         if not all([self.username, self.password]):
-            msg = _LE("san_login and/or san_password is not set for Datera "
-                      "driver in the cinder.conf. Set this information and "
-                      "start the cinder-volume service again.")
+            msg = _("san_login and/or san_password is not set for Datera "
+                    "driver in the cinder.conf. Set this information and "
+                    "start the cinder-volume service again.")
             LOG.error(msg)
             raise exception.InvalidInput(msg)
 
@@ -184,8 +184,8 @@ class DateraDriver(san.SanISCSIDriver):
         else:
             # Handle updating QOS Policies
             if resource_type == 'app_instances':
-                url = 'app_instances/{}/storage_instances/{}/volumes/{' + \
-                      '}/performance_policy'
+                url = ('app_instances/{}/storage_instances/{}/volumes/{'
+                       '}/performance_policy')
                 url = url.format(
                     resource['id'],
                     DEFAULT_STORAGE_NAME,
@@ -204,7 +204,7 @@ class DateraDriver(san.SanISCSIDriver):
         # Generate App Instance, Storage Instance and Volume
         # Volume ID will be used as the App Instance Name
         # Storage Instance and Volumes will have standard names
-        app_params = \
+        app_params = (
             {
                 'create_mode': "openstack",
                 'uuid': str(volume['id']),
@@ -224,7 +224,7 @@ class DateraDriver(san.SanISCSIDriver):
                         }
                     }
                 }
-            }
+            })
         self._create_resource(volume, 'app_instances', body=app_params)
 
     def extend_volume(self, volume, new_size):
@@ -250,8 +250,8 @@ class DateraDriver(san.SanISCSIDriver):
             self.create_export(None, volume)
 
     def create_cloned_volume(self, volume, src_vref):
-        clone_src_template = "/app_instances/{}/storage_instances/{" + \
-                             "}/volumes/{}"
+        clone_src_template = ("/app_instances/{}/storage_instances/{"
+                              "}/volumes/{}")
         src = clone_src_template.format(src_vref['id'], DEFAULT_STORAGE_NAME,
                                         DEFAULT_VOLUME_NAME)
         data = {
@@ -308,8 +308,8 @@ class DateraDriver(san.SanISCSIDriver):
             LOG.info(msg, volume['id'])
 
     def create_snapshot(self, snapshot):
-        url_template = 'app_instances/{}/storage_instances/{}/volumes/{' \
-                       '}/snapshots'
+        url_template = ('app_instances/{}/storage_instances/{}/volumes/{'
+                        '}/snapshots')
         url = url_template.format(snapshot['volume_id'],
                                   DEFAULT_STORAGE_NAME,
                                   DEFAULT_VOLUME_NAME)
@@ -320,8 +320,8 @@ class DateraDriver(san.SanISCSIDriver):
         self._issue_api_request(url, method='post', body=snap_params)
 
     def delete_snapshot(self, snapshot):
-        snap_temp = 'app_instances/{}/storage_instances/{}/volumes/{' \
-                    '}/snapshots'
+        snap_temp = ('app_instances/{}/storage_instances/{}/volumes/{'
+                     '}/snapshots')
         snapu = snap_temp.format(snapshot['volume_id'],
                                  DEFAULT_STORAGE_NAME,
                                  DEFAULT_VOLUME_NAME)
@@ -343,8 +343,8 @@ class DateraDriver(san.SanISCSIDriver):
             LOG.info(msg, snapshot['id'])
 
     def create_volume_from_snapshot(self, volume, snapshot):
-        snap_temp = 'app_instances/{}/storage_instances/{}/volumes/{' \
-                    '}/snapshots'
+        snap_temp = ('app_instances/{}/storage_instances/{}/volumes/{'
+                     '}/snapshots')
         snapu = snap_temp.format(snapshot['volume_id'],
                                  DEFAULT_STORAGE_NAME,
                                  DEFAULT_VOLUME_NAME)
@@ -357,20 +357,20 @@ class DateraDriver(san.SanISCSIDriver):
         else:
             raise exception.NotFound
 
-        src = '/app_instances/{}/storage_instances/{}/volumes/{' \
-            '}/snapshots/{}'.format(
-                snapshot['volume_id'],
-                DEFAULT_STORAGE_NAME,
-                DEFAULT_VOLUME_NAME,
-                found_ts)
-        app_params = \
+        src = ('/app_instances/{}/storage_instances/{}/volumes/{'
+               '}/snapshots/{}'.format(
+                   snapshot['volume_id'],
+                   DEFAULT_STORAGE_NAME,
+                   DEFAULT_VOLUME_NAME,
+                   found_ts))
+        app_params = (
             {
                 'create_mode': 'openstack',
                 'uuid': str(volume['id']),
                 'name': str(volume['id']),
                 'clone_src': src,
                 'access_control_mode': 'allow_all'
-            }
+            })
         self._issue_api_request(
             'app_instances',
             method='post',
@@ -393,7 +393,7 @@ class DateraDriver(san.SanISCSIDriver):
         return self.cluster_stats
 
     def _update_cluster_stats(self):
-        LOG.debug(_LI("Updating cluster stats info."))
+        LOG.debug("Updating cluster stats info.")
 
         results = self._issue_api_request('system')
 
@@ -458,7 +458,7 @@ class DateraDriver(san.SanISCSIDriver):
         payload.encode('utf-8')
 
         if not sensitive:
-            LOG.debug(_LI("Payload for Datera API call: {}".format(payload)))
+            LOG.debug("Payload for Datera API call: %s", payload)
 
         header = {'Content-Type': 'application/json; charset=utf-8'}
 
@@ -487,14 +487,13 @@ class DateraDriver(san.SanISCSIDriver):
         if action is not None:
             connection_string += '/%s' % action
 
-        LOG.debug(_LI("Endpoint for Datera API call: {"
-                      "}".format(connection_string)))
+        LOG.debug("Endpoint for Datera API call: %s", connection_string)
         try:
             response = getattr(requests, method)(connection_string,
                                                  data=payload, headers=header,
                                                  verify=False, cert=cert_data)
         except requests.exceptions.RequestException as ex:
-            msg = _LE(
+            msg = _(
                 'Failed to make a request to Datera cluster endpoint due '
                 'to the following reason: %s') % six.text_type(
                 ex.message)
@@ -503,12 +502,15 @@ class DateraDriver(san.SanISCSIDriver):
 
         data = response.json()
         if not sensitive:
-            LOG.debug(_LI("Results of Datera API call: {}".format(data)))
+            LOG.debug("Results of Datera API call: %s", data)
 
         if not response.ok:
-            LOG.debug(_(response.url))
-            LOG.debug(_(payload))
-            LOG.debug(_(vars(response)))
+            LOG.debug(("Datera Response URL: %s\n"
+                       "Datera Response Payload: %s\n"
+                       "Response Object: %s\n"),
+                      response.url,
+                      payload,
+                      vars(response))
             if response.status_code == 404:
                 raise exception.NotFound(data['message'])
             elif response.status_code in [403, 401]:
@@ -520,10 +522,10 @@ class DateraDriver(san.SanISCSIDriver):
                             'message': data['message']}
                 raise exception.Invalid(msg)
             else:
-                msg = _LE('Request to Datera cluster returned bad status:'
-                          ' %(status)s | %(reason)s') % {
-                              'status': response.status_code,
-                              'reason': response.reason}
+                msg = _('Request to Datera cluster returned bad status:'
+                        ' %(status)s | %(reason)s') % {
+                            'status': response.status_code,
+                            'reason': response.reason}
                 LOG.error(msg)
                 raise exception.DateraAPIException(msg)
 
