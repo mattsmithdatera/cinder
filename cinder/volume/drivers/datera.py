@@ -17,7 +17,6 @@ import json
 
 from oslo_config import cfg
 from oslo_log import log as logging
-from oslo_log import versionutils
 from oslo_utils import excutils
 from oslo_utils import units
 import requests
@@ -25,7 +24,7 @@ import six
 
 from cinder import context
 from cinder import exception
-from cinder.i18n import _, _LE, _LW, _LI
+from cinder.i18n import _, _LE, _LI
 from cinder import utils
 from cinder.volume.drivers.san import san
 from cinder.volume import qos_specs
@@ -34,11 +33,6 @@ from cinder.volume import volume_types
 LOG = logging.getLogger(__name__)
 
 d_opts = [
-    cfg.StrOpt('datera_api_token',
-               default=None,
-               help='DEPRECATED: This will be removed in the Liberty release. '
-                    'Use san_login and san_password instead. This directly '
-                    'sets the Datera API token.'),
     cfg.StrOpt('datera_api_port',
                default='7717',
                help='Datera API port.'),
@@ -52,8 +46,6 @@ d_opts = [
 
 
 CONF = cfg.CONF
-CONF.import_opt('driver_client_cert_key', 'cinder.volume.driver')
-CONF.import_opt('driver_client_cert', 'cinder.volume.driver')
 CONF.import_opt('driver_use_ssl', 'cinder.volume.driver')
 CONF.register_opts(d_opts)
 
@@ -103,6 +95,7 @@ class DateraDriver(san.SanISCSIDriver):
         self.password = self.configuration.san_password
         self.auth_token = None
         self.cluster_stats = {}
+        self.datera_api_token = None
 
     def _login(self):
         """Use the san_login and san_password to set self.auth_token."""
@@ -119,35 +112,18 @@ class DateraDriver(san.SanISCSIDriver):
             LOG.debug('Getting Datera auth token.')
             results = self._issue_api_request('login', 'put', body=body,
                                               sensitive=True)
-            self.auth_token = results['key']
-            self.configuration.datera_api_token = results['key']
+            self.datera_api_token = results['key']
         except exception.NotAuthorized:
             with excutils.save_and_reraise_exception():
                 LOG.error(_LE('Logging into the Datera cluster failed. Please '
                               'check your username and password set in the '
-                              'cinder.conf and start the cinder-volume'
+                              'cinder.conf and start the cinder-volume '
                               'service again.'))
 
     def _get_lunid(self):
         return 0
 
     def do_setup(self, context):
-        # If any of the deprecated options are set, we'll warn the operator to
-        # use the new authentication method.
-        DEPRECATED_OPTS = [
-            self.configuration.driver_client_cert_key,
-            self.configuration.driver_client_cert,
-            self.configuration.datera_api_token
-        ]
-
-        if any(DEPRECATED_OPTS):
-            msg = _LW("Client cert verification and datera_api_token are "
-                      "deprecated in the Datera driver, and will be removed "
-                      "in the Liberty release. Please set the san_login and "
-                      "san_password in your cinder.conf instead.")
-            versionutils.report_deprecated_feature(LOG, msg)
-            return
-
         # If we can't authenticate through the old and new method, just fail
         # now.
         if not all([self.username, self.password]):
@@ -303,8 +279,8 @@ class DateraDriver(san.SanISCSIDriver):
         try:
             self._issue_api_request(url, method='put', body=data)
         except exception.NotFound:
-            msg = _("Tried to detach volume %s, but it was not found in the "
-                    "Datera cluster. Continuing with detach.")
+            msg = _LI("Tried to detach volume %s, but it was not found in the "
+                      "Datera cluster. Continuing with detach.")
             LOG.info(msg, volume['id'])
 
     def create_snapshot(self, snapshot):
@@ -329,7 +305,7 @@ class DateraDriver(san.SanISCSIDriver):
         snapshots = self._issue_api_request(snapu, method='get')
 
         try:
-            for ts, snap in snapshots.viewitems():
+            for ts, snap in snapshots.items():
                 if snap['uuid'] == snapshot['id']:
                     url_template = snapu + '/{}'
                     url = url_template.format(ts)
@@ -350,7 +326,7 @@ class DateraDriver(san.SanISCSIDriver):
                                  DEFAULT_VOLUME_NAME)
 
         snapshots = self._issue_api_request(snapu, method='get')
-        for ts, snap in snapshots.viewitems():
+        for ts, snap in snapshots.items():
             if snap['uuid'] == snapshot['id']:
                 found_ts = ts
                 break
@@ -451,7 +427,7 @@ class DateraDriver(san.SanISCSIDriver):
         """
         host = self.configuration.san_ip
         port = self.configuration.datera_api_port
-        api_token = self.configuration.datera_api_token
+        api_token = self.datera_api_token
         api_version = self.configuration.datera_api_version
 
         payload = json.dumps(body, ensure_ascii=False)
