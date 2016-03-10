@@ -39,6 +39,8 @@ class DateraVolumeTestCase(test.TestCase):
         self.cfg.datera_api_port = '7717'
         self.cfg.datera_api_version = '1'
         self.cfg.datera_num_replicas = '2'
+        self.cfg.datera_503_timeout = 1
+        self.cfg.datera_503_interval = 1
         self.cfg.san_login = 'user'
         self.cfg.san_password = 'pass'
 
