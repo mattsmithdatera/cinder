@@ -40,7 +40,7 @@ d_opts = [
                default='2',
                help='Datera API version.'),
     cfg.StrOpt('datera_num_replicas',
-               default='1',
+               default='3',
                help='Number of replicas to create of an inode.')
 ]
 
