@@ -16,10 +16,11 @@
 import json
 import time
 import uuid
+import functools
 # import re
 
 from oslo_config import cfg
-# from oslo_log import log as logging
+from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import units
 import requests
@@ -34,12 +35,12 @@ from cinder.volume.drivers.san import san
 from cinder.volume import qos_specs
 from cinder.volume import volume_types
 
-import sys
-import logging
-logging.basicConfig(level=logging.DEBUG, stream=sys.stdout)
+# import sys
+# import logging
+# logging.basicConfig(level=logging.DEBUG, stream=sys.stdout)
 # LOG = logging.getLogger(__name__)
 LOG = logging.getLogger()
-LOG.setLevel(logging.DEBUG)
+# LOG.setLevel(logging.DEBUG)
 
 d_opts = [
     cfg.StrOpt('datera_api_port',
@@ -49,7 +50,7 @@ d_opts = [
                default='2',
                help='Datera API version.'),
     cfg.StrOpt('datera_num_replicas',
-               default='1',
+               default='3',
                help='Number of replicas to create of an inode.'),
     cfg.StrOpt('datera_503_timeout',
                default='120',
@@ -59,7 +60,10 @@ d_opts = [
                help='Interval between 503 retries'),
     cfg.StrOpt('datera_acl_allow_all',
                default='False',
-               help="True to set acl 'allow_all' on volumes created")
+               help="True to set acl 'allow_all' on volumes created"),
+    cfg.StrOpt('datera_debug',
+               default='False',
+               help="True to set function arg and return logging")
 ]
 
 
@@ -94,7 +98,7 @@ def _authenticated(func):
     In do_setup() we fetch an auth token and store it. If that expires when
     we do API request, we'll fetch a new one.
     """
-
+    @functools.wraps(func)
     def func_wrapper(self, *args, **kwargs):
         try:
             return func(self, *args, **kwargs)
@@ -111,6 +115,7 @@ def _authenticated(func):
     return func_wrapper
 
 
+@six.add_metaclass(utils.TraceWrapperWithABCMetaclass)
 class DateraDriver(san.SanISCSIDriver):
 
     """The OpenStack Datera Driver
@@ -138,6 +143,13 @@ class DateraDriver(san.SanISCSIDriver):
         self.interval = int(self.configuration.datera_503_interval)
         self.allow_all = self.configuration.datera_acl_allow_all == 'True'
         self.driver_prefix = str(uuid.uuid4())[:4]
+        self.datera_debug = self.configuration.datera_debug == 'True'
+
+        if self.datera_debug:
+            utils.setup_tracing(['method'])
+
+    def __getattr__(self):
+        pass
 
     def _login(self):
         """Use the san_login and san_password to set self.auth_token."""
@@ -263,13 +275,13 @@ class DateraDriver(san.SanISCSIDriver):
             self.create_export(None, volume)
 
     def create_cloned_volume(self, volume, src_vref):
-        src = URL_TEMPLATES['vol_inst'].format(src_vref['id'])
+        src = "/" + URL_TEMPLATES['vol_inst'].format(src_vref['id'])
         data = {
             'create_mode': 'openstack',
             'name': str(volume['id']),
             'uuid': str(volume['id']),
             'clone_src': src,
-            'access_control_mode': 'allow_all'
+            # 'access_control_mode': 'allow_all'
         }
         self._issue_api_request(URL_TEMPLATES['ai'], 'post', body=data)
 
@@ -355,8 +367,31 @@ class DateraDriver(san.SanISCSIDriver):
         portal = storage_instance['access']['ips'][0] + ':3260'
         iqn = storage_instance['access']['iqn']
 
-        # Portal, IQN, LUNID
-        provider_location = '%s %s %s' % (portal, iqn, self._get_lunid())
+        if connector.get('multipath'):
+            portal2 = storage_instance['access']['ips'][1] + ':3260'
+            iqn2 = iqn
+            return {
+                'driver_volume_type': 'iscsi',
+                'data': {
+                    'target_discovered': False,
+                    'target_iqn': iqn,
+                    'target_iqns': [
+                        iqn,
+                        iqn2],
+                    'target_portal': portal,
+                    'target_portals': [
+                        portal,
+                        portal2],
+                    'target_lun': self._get_lunid(),
+                    'target_luns': [
+                        self._get_lunid(),
+                        self._get_lunid()],
+                    'volume_id': 1,
+                    'discard': False}}
+        else:
+            # Portal, IQN, LUNID
+            provider_location = '{} {} {}'.format(
+                portal, iqn, self._get_lunid())
         return {'provider_location': provider_location}
 
     def detach_volume(self, context, volume, attachment=None,
@@ -392,7 +427,7 @@ class DateraDriver(san.SanISCSIDriver):
                 if not self._check_for_acl(initiator_iqn_path):
                     self._issue_api_request(initiator_iqn_path.lstrip("/"),
                                             method="delete")
-            except KeyError:
+            except IndexError:
                 LOG.debug("Did not find any initiator groups for volume: %s",
                           volume)
 
@@ -448,14 +483,14 @@ class DateraDriver(san.SanISCSIDriver):
         else:
             raise exception.NotFound
 
-        src = snap_temp + '/{}'.format(snapshot['volume_id'], found_ts)
+        src = "/" + (snap_temp + '/{}').format(snapshot['volume_id'], found_ts)
         app_params = (
             {
                 'create_mode': 'openstack',
                 'uuid': str(volume['id']),
                 'name': str(volume['id']),
                 'clone_src': src,
-                'access_control_mode': 'allow_all'
+                # 'access_control_mode': 'allow_all'
             })
         self._issue_api_request(
             URL_TEMPLATES['ai'],
