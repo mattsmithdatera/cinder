@@ -51,19 +51,23 @@ d_opts = [
                help='Datera API version.'),
     cfg.StrOpt('datera_num_replicas',
                default='3',
-               help='Number of replicas to create of an inode.'),
+               help='Number of replicas to create of an inode. '
+                    'Ignored for templates'),
     cfg.StrOpt('datera_503_timeout',
                default='120',
                help='Timeout for HTTP 503 retry messages'),
     cfg.StrOpt('datera_503_interval',
                default='5',
                help='Interval between 503 retries'),
-    cfg.StrOpt('datera_acl_allow_all',
-               default='False',
-               help="True to set acl 'allow_all' on volumes created"),
-    cfg.StrOpt('datera_debug',
-               default='False',
-               help="True to set function arg and return logging")
+    cfg.BoolOpt('datera_acl_allow_all',
+                default=False,
+                help="True to set acl 'allow_all' on volumes created"),
+    cfg.BoolOpt('datera_debug',
+                default=False,
+                help="True to set function arg and return logging"),
+    cfg.StrOpt('datera_template',
+               default='None',
+               help='The template to use for Datera app_instances'),
 ]
 
 
@@ -141,15 +145,12 @@ class DateraDriver(san.SanISCSIDriver):
             int(int(self.configuration.datera_503_timeout) /
                 int(self.configuration.datera_503_interval)))
         self.interval = int(self.configuration.datera_503_interval)
-        self.allow_all = self.configuration.datera_acl_allow_all == 'True'
+        self.allow_all = self.configuration.datera_acl_allow_all
         self.driver_prefix = str(uuid.uuid4())[:4]
-        self.datera_debug = self.configuration.datera_debug == 'True'
+        self.datera_debug = self.configuration.datera_debug
 
         if self.datera_debug:
             utils.setup_tracing(['method'])
-
-    def __getattr__(self):
-        pass
 
     def _login(self):
         """Use the san_login and san_password to set self.auth_token."""
@@ -217,7 +218,11 @@ class DateraDriver(san.SanISCSIDriver):
                 url = URL_TEMPLATES['vol_inst'] + '/performance_policy'
                 url = url.format(resource['id'])
                 if type_id is not None:
-                    policies = self._get_policies_by_volume_type(type_id)
+                    # Filter for just QOS policies in result. All of their keys
+                    # should end with "max"
+                    policies = {k: v for k, v in
+                                self._get_policies_by_volume_type(
+                                    type_id).items() if k.endswith("max")}
                     if policies:
                         self._issue_api_request(url, 'post', body=policies)
             if result['storage_instances'][DEFAULT_STORAGE_NAME]['volumes'][
@@ -225,54 +230,78 @@ class DateraDriver(san.SanISCSIDriver):
                 return
             self._wait_for_resource(resource['id'], resource_type)
 
+    def _get_template(self, volume):
+        type_id = volume.get('volume_type_id')
+        if type_id:
+            policies = self._get_policies_by_volume_type(type_id, scoped=False)
+            template = policies.get('template', None)
+        return template
+
     def create_volume(self, volume):
         """Create a logical volume."""
-        # Generate App Instance, Storage Instance and Volume
-        # Volume ID will be used as the App Instance Name
-        # Storage Instance and Volumes will have standard names
-        app_params = (
-            {
-                'create_mode': "openstack",
-                'uuid': str(volume['id']),
-                'name': str(volume['id']),
-                'access_control_mode': 'deny_all',
-                'storage_instances': {
-                    DEFAULT_STORAGE_NAME: {
-                        'name': DEFAULT_STORAGE_NAME,
-                        'volumes': {
-                            DEFAULT_VOLUME_NAME: {
-                                'name': DEFAULT_VOLUME_NAME,
-                                'size': volume['size'],
-                                'replica_count': int(self.num_replicas),
-                                'snapshot_policies': {
+        # Check to see if we have a template specified in extra_specs or
+        # QoS specs.  If so, use it instead of standalone
+        template = self._get_template(volume)
+        if template:
+            app_params = (
+                {
+                    'create_mode': "openstack",
+                    'name': str(volume['id']),
+                    'uuid': str(volume['id']),
+                    'access_control_mode': 'deny_all',
+                    'app_template': '/app_templates/{}'.format(template)
+                })
+
+        # If no template is found, fallback to standalone app_instances
+        else:
+            # Generate App Instance, Storage Instance and Volume
+            # Volume ID will be used as the App Instance Name
+            # Storage Instance and Volumes will have standard names
+            app_params = (
+                {
+                    'create_mode': "openstack",
+                    'uuid': str(volume['id']),
+                    'name': str(volume['id']),
+                    'access_control_mode': 'deny_all',
+                    'storage_instances': {
+                        DEFAULT_STORAGE_NAME: {
+                            'name': DEFAULT_STORAGE_NAME,
+                            'volumes': {
+                                DEFAULT_VOLUME_NAME: {
+                                    'name': DEFAULT_VOLUME_NAME,
+                                    'size': volume['size'],
+                                    'replica_count': int(self.num_replicas),
+                                    'snapshot_policies': {
+                                    }
                                 }
                             }
                         }
                     }
-                }
-            })
+                })
         self._create_resource(volume, URL_TEMPLATES['ai'], body=app_params)
 
     def extend_volume(self, volume, new_size):
-        # Offline App Instance, if necessary
-        reonline = False
-        app_inst = self._issue_api_request(
-            URL_TEMPLATES['ai_inst'].format(volume['id']))
-        if app_inst['admin_state'] == 'online':
-            reonline = True
-            self.detach_volume(None, volume, delete_initiator=False)
-        # Change Volume Size
-        app_inst = volume['id']
-        data = {
-            'size': new_size
-        }
-        self._issue_api_request(
-            URL_TEMPLATES['vol_inst'].format(app_inst),
-            method='put',
-            body=data)
-        # Online Volume, if it was online before
-        if reonline:
-            self.create_export(None, volume)
+        template = self._get_template(volume)
+        if not template:
+            # Offline App Instance, if necessary
+            reonline = False
+            app_inst = self._issue_api_request(
+                URL_TEMPLATES['ai_inst'].format(volume['id']))
+            if app_inst['admin_state'] == 'online':
+                reonline = True
+                self.detach_volume(None, volume)
+            # Change Volume Size
+            app_inst = volume['id']
+            data = {
+                'size': new_size
+            }
+            self._issue_api_request(
+                URL_TEMPLATES['vol_inst'].format(app_inst),
+                method='put',
+                body=data)
+            # Online Volume, if it was online before
+            if reonline:
+                self.create_export(None, volume)
 
     def create_cloned_volume(self, volume, src_vref):
         src = "/" + URL_TEMPLATES['vol_inst'].format(src_vref['id'])
@@ -281,7 +310,6 @@ class DateraDriver(san.SanISCSIDriver):
             'name': str(volume['id']),
             'uuid': str(volume['id']),
             'clone_src': src,
-            # 'access_control_mode': 'allow_all'
         }
         self._issue_api_request(URL_TEMPLATES['ai'], 'post', body=data)
 
@@ -296,21 +324,66 @@ class DateraDriver(san.SanISCSIDriver):
                       "Datera cluster. Continuing with delete.")
             LOG.info(msg, volume['id'])
 
-    def ensure_export(self, context, volume, connector):
+    def ensure_export(self, context, volume, connector=None):
         """Gets the associated account, retrieves CHAP info and updates."""
         return self.create_export(context, volume, connector)
+
+    def initialize_connection(self, volume, connector):
+        # Now online the app_instance (which will online all storage_instances)
+        multipath = connector.get('multipath', False)
+        url = URL_TEMPLATES['ai_inst'].format(volume['id'])
+        data = {
+            'admin_state': 'online'
+        }
+        app_inst = self._issue_api_request(url, method='put', body=data)
+        storage_instances = app_inst["storage_instances"]
+        si_names = storage_instances.keys()
+
+        portal = storage_instances[si_names[0]]['access']['ips'][0] + ':3260'
+        iqn = storage_instances[si_names[0]]['access']['iqn']
+        if multipath:
+            portals = [p + ':3260' for p in
+                       storage_instances[si_names[0]]['access']['ips']]
+            iqns = [iqn for _ in
+                    storage_instances[si_names[0]]['access']['ips']]
+            lunids = [self._get_lunid() for _ in
+                      storage_instances[si_names[0]]['access']['ips']]
+
+            return {
+                'driver_volume_type': 'iscsi',
+                'data': {
+                    'target_discovered': False,
+                    'target_iqn': iqn,
+                    'target_iqns': iqns,
+                    'target_portal': portal,
+                    'target_portals': portals,
+                    'target_lun': self._get_lunid(),
+                    'target_luns': lunids,
+                    'volume_id': 1,
+                    'discard': False}}
+        else:
+            return {
+                'driver_volume_type': 'iscsi',
+                'data': {
+                    'target_discovered': False,
+                    'target_iqn': iqn,
+                    'target_portal': portal,
+                    'target_lun': self._get_lunid(),
+                    'volume_id': 1,
+                    'discard': False}}
 
     def create_export(self, context, volume, connector):
         """Gets the associated account, retrieves CHAP info and updates."""
         # Check if we've already setup everything for this volume
+        template = self._get_template(volume)
         url = (URL_TEMPLATES['si'].format(volume['id']))
-        self._issue_api_request(url)
+        storage_instances = self._issue_api_request(url)
         # Handle adding initiator to product if necessary
         # Then add initiator to ACL
-        if connector and connector.get('initiator') and not self.allow_all:
+        if (connector and connector.get('initiator') and not self.allow_all):
             initiator_name = "OpenStack_{}_{}".format(
                 self.driver_prefix, str(uuid.uuid4())[:4])
-            initiator_group = initiator_name
+            initiator_group = 'IG-' + volume['id']
             found = False
             initiator = connector['initiator']
             current_initiators = self._issue_api_request('initiators')
@@ -332,18 +405,26 @@ class DateraDriver(san.SanISCSIDriver):
             initiator_group_path = "/initiator_groups/{}".format(
                 initiator_group)
             ig_data = {'name': initiator_group, 'members': [initiator_path]}
+
+            # It's ok if we get a conflict here too, it just means the volume
+            # ID that we're exporting is being re-used.  No need to panic
             self._issue_api_request("initiator_groups",
                                     method="post",
-                                    body=ig_data)
-            # Create ACL with initiator group as reference
-            acl_url = (URL_TEMPLATES['si_inst'] + "/acl_policy").format(
-                volume['id'])
-            data = {'initiator_groups': [initiator_group_path]}
-            self._issue_api_request(acl_url,
-                                    method="put",
-                                    body=data)
+                                    body=ig_data,
+                                    conflict_ok=True)
+            # Create ACL with initiator group as reference for each
+            # storage_instance in app_instance
+            # TODO: We need to avoid changing the ACLs if the template already
+            # specifies an ACL policy.
+            for si_name in storage_instances.keys():
+                acl_url = (URL_TEMPLATES['si'] + "/{}/acl_policy").format(
+                    volume['id'], si_name)
+                data = {'initiator_groups': [initiator_group_path]}
+                self._issue_api_request(acl_url,
+                                        method="put",
+                                        body=data)
 
-        if connector and connector.get('ip'):
+        if not template and connector and connector.get('ip'):
             # Determine IP Pool from IP and update storage_instance
             initiator_ip_pool_path = self._get_ip_pool_for_string_ip(
                 connector['ip'])
@@ -355,48 +436,7 @@ class DateraDriver(san.SanISCSIDriver):
                                     method="put",
                                     body=ip_pool_data)
 
-        # Now online the storage instance
-        url = URL_TEMPLATES['ai_inst'].format(volume['id'])
-        data = {
-            'admin_state': 'online'
-        }
-        app_inst = self._issue_api_request(url, method='put', body=data)
-        storage_instance = app_inst['storage_instances'][
-            DEFAULT_STORAGE_NAME]
-
-        portal = storage_instance['access']['ips'][0] + ':3260'
-        iqn = storage_instance['access']['iqn']
-
-        if connector.get('multipath'):
-            portal2 = storage_instance['access']['ips'][1] + ':3260'
-            iqn2 = iqn
-            return {
-                'driver_volume_type': 'iscsi',
-                'data': {
-                    'target_discovered': False,
-                    'target_iqn': iqn,
-                    'target_iqns': [
-                        iqn,
-                        iqn2],
-                    'target_portal': portal,
-                    'target_portals': [
-                        portal,
-                        portal2],
-                    'target_lun': self._get_lunid(),
-                    'target_luns': [
-                        self._get_lunid(),
-                        self._get_lunid()],
-                    'volume_id': 1,
-                    'discard': False}}
-        else:
-            # Portal, IQN, LUNID
-            provider_location = '{} {} {}'.format(
-                portal, iqn, self._get_lunid())
-        return {'provider_location': provider_location}
-
-    def detach_volume(self, context, volume, attachment=None,
-                      delete_initiator=True):
-        found = False
+    def detach_volume(self, context, volume, attachment=None):
         url = URL_TEMPLATES['ai_inst'].format(volume['id'])
         data = {
             'admin_state': 'offline',
@@ -404,32 +444,12 @@ class DateraDriver(san.SanISCSIDriver):
         }
         try:
             self._issue_api_request(url, method='put', body=data)
-            found = True
         except exception.NotFound:
             msg = _LI("Tried to detach volume %s, but it was not found in the "
                       "Datera cluster. Continuing with detach.")
             LOG.info(msg, volume['id'])
         # TODO: Make acl cleaning multi-attach aware
-        if found and delete_initiator:
-            acl_url = (URL_TEMPLATES["si_inst"] + "/acl_policy").format(
-                volume['id'])
-            try:
-                initiator_group = self._issue_api_request(acl_url)[
-                    'initiator_groups'][0]
-                initiator_iqn_path = self._issue_api_request(
-                    initiator_group.lstrip("/"))["members"][0]
-                # Clear out ACL and delete initiator group
-                self._issue_api_request(acl_url,
-                                        method="put",
-                                        body={'initiator_groups': []})
-                self._issue_api_request(initiator_group.lstrip("/"),
-                                        method="delete")
-                if not self._check_for_acl(initiator_iqn_path):
-                    self._issue_api_request(initiator_iqn_path.lstrip("/"),
-                                            method="delete")
-            except IndexError:
-                LOG.debug("Did not find any initiator groups for volume: %s",
-                          volume)
+        self._clean_acl(volume)
 
     def _check_for_acl(self, initiator_path):
         """ Returns True if an acl is found for initiator_path """
@@ -443,6 +463,27 @@ class DateraDriver(san.SanISCSIDriver):
                 return True
         LOG.debug("No initiator_group found for initiator: %s", initiator_path)
         return False
+
+    def _clean_acl(self, volume):
+        acl_url = (URL_TEMPLATES["si_inst"] + "/acl_policy").format(
+            volume['id'])
+        try:
+            initiator_group = self._issue_api_request(acl_url)[
+                'initiator_groups'][0]
+            initiator_iqn_path = self._issue_api_request(
+                initiator_group.lstrip("/"))["members"][0]
+            # Clear out ACL and delete initiator group
+            self._issue_api_request(acl_url,
+                                    method="put",
+                                    body={'initiator_groups': []})
+            self._issue_api_request(initiator_group.lstrip("/"),
+                                    method="delete")
+            if not self._check_for_acl(initiator_iqn_path):
+                self._issue_api_request(initiator_iqn_path.lstrip("/"),
+                                        method="delete")
+        except IndexError:
+            LOG.debug("Did not find any initiator groups for volume: %s",
+                      volume)
 
     def create_snapshot(self, snapshot):
         url_template = URL_TEMPLATES['vol_inst'] + '/snapshots'
@@ -484,6 +525,7 @@ class DateraDriver(san.SanISCSIDriver):
             raise exception.NotFound
 
         src = "/" + (snap_temp + '/{}').format(snapshot['volume_id'], found_ts)
+
         app_params = (
             {
                 'create_mode': 'openstack',
@@ -522,6 +564,7 @@ class DateraDriver(san.SanISCSIDriver):
             LOG.error(_LE('Failed to get updated stats from Datera Cluster.'))
 
         backend_name = self.configuration.safe_get('volume_backend_name')
+        template = self.configuration.safe_get('datera_template')
         stats = {
             'volume_backend_name': backend_name or 'Datera',
             'vendor_name': 'Datera',
@@ -531,10 +574,13 @@ class DateraDriver(san.SanISCSIDriver):
             'free_capacity_gb': int(results['available_capacity']) / units.Gi,
             'reserved_percentage': 0,
         }
+        # Add the datera template if necessary
+        if template != 'None':
+            stats['template'] = template
 
         self.cluster_stats = stats
 
-    def _get_policies_by_volume_type(self, type_id):
+    def _get_policies_by_volume_type(self, type_id, scoped=True):
         """Get extra_specs and qos_specs of a volume_type.
 
         This fetches the scoped keys from the volume type. Anything set from
@@ -546,9 +592,12 @@ class DateraDriver(san.SanISCSIDriver):
 
         policies = {}
         for key, value in specs.items():
-            if ':' in key:
-                fields = key.split(':')
-                key = fields[1]
+            if scoped:
+                if ':' in key:
+                    fields = key.split(':')
+                    key = fields[1]
+                    policies[key] = value
+            else:
                 policies[key] = value
 
         qos_specs_id = volume_type.get('qos_specs_id')
