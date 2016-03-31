@@ -141,9 +141,9 @@ class DateraDriver(san.SanISCSIDriver):
             int(int(self.configuration.datera_503_timeout) /
                 int(self.configuration.datera_503_interval)))
         self.interval = int(self.configuration.datera_503_interval)
-        self.allow_all = self.configuration.datera_acl_allow_all == 'True'
+        self.allow_all = self.configuration.datera_acl_allow_all
         self.driver_prefix = str(uuid.uuid4())[:4]
-        self.datera_debug = self.configuration.datera_debug == 'True'
+        self.datera_debug = self.configuration.datera_debug
 
         if self.datera_debug:
             utils.setup_tracing(['method'])
@@ -391,15 +391,19 @@ class DateraDriver(san.SanISCSIDriver):
 
         if connector and connector.get('ip'):
             # Determine IP Pool from IP and update storage_instance
-            initiator_ip_pool_path = self._get_ip_pool_for_string_ip(
-                connector['ip'])
+            try:
+                initiator_ip_pool_path = self._get_ip_pool_for_string_ip(
+                    connector['ip'])
 
-            ip_pool_url = URL_TEMPLATES['si_inst'].format(
-                volume['id'])
-            ip_pool_data = {'ip_pool': initiator_ip_pool_path}
-            self._issue_api_request(ip_pool_url,
-                                    method="put",
-                                    body=ip_pool_data)
+                ip_pool_url = URL_TEMPLATES['si_inst'].format(
+                    volume['id'])
+                ip_pool_data = {'ip_pool': initiator_ip_pool_path}
+                self._issue_api_request(ip_pool_url,
+                                        method="put",
+                                        body=ip_pool_data)
+            except exception.DateraAPIException:
+                # Datera product 1.0 support
+                pass
 
     def detach_volume(self, context, volume, attachment=None):
         url = URL_TEMPLATES['ai_inst'].format(volume['id'])
