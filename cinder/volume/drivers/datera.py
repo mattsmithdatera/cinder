@@ -148,6 +148,7 @@ class DateraDriver(san.SanISCSIDriver):
         self.allow_all = self.configuration.datera_acl_allow_all
         self.driver_prefix = str(uuid.uuid4())[:4]
         self.datera_debug = self.configuration.datera_debug
+        self.datera_template = self.configuration.datera_template
 
         if self.datera_debug:
             utils.setup_tracing(['method'])
@@ -235,7 +236,7 @@ class DateraDriver(san.SanISCSIDriver):
         if type_id:
             policies = self._get_policies_by_volume_type(type_id, scoped=False)
             template = policies.get('template', None)
-        return template
+            return template
 
     def create_volume(self, volume):
         """Create a logical volume."""
@@ -564,7 +565,7 @@ class DateraDriver(san.SanISCSIDriver):
             LOG.error(_LE('Failed to get updated stats from Datera Cluster.'))
 
         backend_name = self.configuration.safe_get('volume_backend_name')
-        template = self.configuration.safe_get('datera_template')
+        template = self.datera_template
         stats = {
             'volume_backend_name': backend_name or 'Datera',
             'vendor_name': 'Datera',
