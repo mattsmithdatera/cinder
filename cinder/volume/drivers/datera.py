@@ -49,13 +49,13 @@ d_opts = [
     cfg.StrOpt('datera_api_version',
                default='2',
                help='Datera API version.'),
-    cfg.StrOpt('datera_num_replicas',
+    cfg.IntOpt('datera_num_replicas',
                default='3',
                help='Number of replicas to create of an inode.'),
-    cfg.StrOpt('datera_503_timeout',
+    cfg.IntOpt('datera_503_timeout',
                default='120',
                help='Timeout for HTTP 503 retry messages'),
-    cfg.StrOpt('datera_503_interval',
+    cfg.IntOpt('datera_503_interval',
                default='5',
                help='Interval between 503 retries'),
     cfg.BoolOpt('datera_acl_allow_all',
@@ -137,10 +137,9 @@ class DateraDriver(san.SanISCSIDriver):
         self.auth_token = None
         self.cluster_stats = {}
         self.datera_api_token = None
-        self.retry_attempts = (
-            int(int(self.configuration.datera_503_timeout) /
-                int(self.configuration.datera_503_interval)))
-        self.interval = int(self.configuration.datera_503_interval)
+        self.retry_attempts = (int(self.configuration.datera_503_timeout /
+                                   self.configuration.datera_503_interval))
+        self.interval = self.configuration.datera_503_interval
         self.allow_all = self.configuration.datera_acl_allow_all
         self.driver_prefix = str(uuid.uuid4())[:4]
         self.datera_debug = self.configuration.datera_debug
@@ -240,7 +239,7 @@ class DateraDriver(san.SanISCSIDriver):
                             DEFAULT_VOLUME_NAME: {
                                 'name': DEFAULT_VOLUME_NAME,
                                 'size': volume['size'],
-                                'replica_count': int(self.num_replicas),
+                                'replica_count': self.num_replicas,
                                 'snapshot_policies': {
                                 }
                             }
