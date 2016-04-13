@@ -246,7 +246,7 @@ class DateraDriver(san.SanISCSIDriver):
         if template:
             app_params = (
                 {
-                    'create_mode': "openstack",
+                    # 'create_mode': "openstack",
                     'name': str(volume['id']),
                     'uuid': str(volume['id']),
                     'access_control_mode': 'deny_all',
