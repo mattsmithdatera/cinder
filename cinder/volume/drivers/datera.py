@@ -426,16 +426,19 @@ class DateraDriver(san.SanISCSIDriver):
                                         body=data)
 
         if not template and connector and connector.get('ip'):
-            # Determine IP Pool from IP and update storage_instance
-            initiator_ip_pool_path = self._get_ip_pool_for_string_ip(
-                connector['ip'])
+            try:
+                # Determine IP Pool from IP and update storage_instance
+                initiator_ip_pool_path = self._get_ip_pool_for_string_ip(
+                    connector['ip'])
 
-            ip_pool_url = URL_TEMPLATES['si_inst'].format(
-                volume['id'])
-            ip_pool_data = {'ip_pool': initiator_ip_pool_path}
-            self._issue_api_request(ip_pool_url,
-                                    method="put",
-                                    body=ip_pool_data)
+                ip_pool_url = URL_TEMPLATES['si_inst'].format(
+                    volume['id'])
+                ip_pool_data = {'ip_pool': initiator_ip_pool_path}
+                self._issue_api_request(ip_pool_url,
+                                        method="put",
+                                        body=ip_pool_data)
+            except exception.DateraAPIException:
+                pass
 
     def detach_volume(self, context, volume, attachment=None):
         url = URL_TEMPLATES['ai_inst'].format(volume['id'])
