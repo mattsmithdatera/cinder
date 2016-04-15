@@ -221,7 +221,7 @@ class DateraDriver(san.SanISCSIDriver):
                 if type_id is not None:
                     # Filter for just QOS policies in result. All of their keys
                     # should end with "max"
-                    policies = {k: v for k, v in
+                    policies = {k: int(v) for k, v in
                                 self._get_policies_by_volume_type(
                                     type_id).items() if k.endswith("max")}
                     if policies:
