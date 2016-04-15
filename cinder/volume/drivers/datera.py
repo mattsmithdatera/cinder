@@ -213,7 +213,11 @@ class DateraDriver(san.SanISCSIDriver):
                 url = URL_TEMPLATES['vol_inst'] + '/performance_policy'
                 url = url.format(resource['id'])
                 if type_id is not None:
-                    policies = self._get_policies_by_volume_type(type_id)
+                    # Filter for just QOS policies in result. All of their keys
+                    # should end with "max"
+                    policies = {k: int(v) for k, v in
+                                self._get_policies_by_volume_type(
+                                    type_id).items() if k.endswith("max")}
                     if policies:
                         self._issue_api_request(url, 'post', body=policies)
             if result['storage_instances'][DEFAULT_STORAGE_NAME]['volumes'][
