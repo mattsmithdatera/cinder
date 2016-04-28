@@ -51,8 +51,7 @@ d_opts = [
                help='Datera API version.'),
     cfg.StrOpt('datera_num_replicas',
                default='3',
-               help='Number of replicas to create of an inode. '
-                    'Ignored for templates'),
+               help='Number of replicas to create of an inode.'),
     cfg.StrOpt('datera_503_timeout',
                default='120',
                help='Timeout for HTTP 503 retry messages'),
@@ -62,9 +61,6 @@ d_opts = [
     cfg.BoolOpt('datera_acl_allow_all',
                 default=False,
                 help="True to set acl 'allow_all' on volumes created"),
-    cfg.StrOpt('datera_template',
-               default='None',
-               help='The template to use for Datera app_instances'),
 ]
 
 
@@ -142,8 +138,10 @@ class DateraDriver(san.SanISCSIDriver):
                 int(self.configuration.datera_503_interval)))
         self.interval = int(self.configuration.datera_503_interval)
         self.allow_all = self.configuration.datera_acl_allow_all
+        self.allow_all_str = ('allow_all'
+                              if self.allow_all
+                              else 'deny_all')
         self.driver_prefix = str(uuid.uuid4())[:4]
-        self.datera_template = self.configuration.datera_template
 
     def _login(self):
         """Use the san_login and san_password to set self.auth_token."""
@@ -223,78 +221,54 @@ class DateraDriver(san.SanISCSIDriver):
                 return
             self._wait_for_resource(resource['id'], resource_type)
 
-    def _get_template(self, volume):
-        type_id = volume.get('volume_type_id')
-        if type_id:
-            policies = self._get_policies_by_volume_type(type_id, scoped=False)
-            template = policies.get('template', None)
-            return template
-
     def create_volume(self, volume):
         """Create a logical volume."""
-        # Check to see if we have a template specified in extra_specs or
-        # QoS specs.  If so, use it instead of standalone
-        template = self._get_template(volume)
-        if template:
-            app_params = (
-                {
-                    'create_mode': "openstack",
-                    'name': str(volume['id']),
-                    'uuid': str(volume['id']),
-                    'access_control_mode': 'deny_all',
-                    'app_template': '/app_templates/{}'.format(template)
-                })
-
-        # If no template is found, fallback to standalone app_instances
-        else:
-            # Generate App Instance, Storage Instance and Volume
-            # Volume ID will be used as the App Instance Name
-            # Storage Instance and Volumes will have standard names
-            app_params = (
-                {
-                    'create_mode': "openstack",
-                    'uuid': str(volume['id']),
-                    'name': str(volume['id']),
-                    'access_control_mode': 'deny_all',
-                    'storage_instances': {
-                        DEFAULT_STORAGE_NAME: {
-                            'name': DEFAULT_STORAGE_NAME,
-                            'volumes': {
-                                DEFAULT_VOLUME_NAME: {
-                                    'name': DEFAULT_VOLUME_NAME,
-                                    'size': volume['size'],
-                                    'replica_count': int(self.num_replicas),
-                                    'snapshot_policies': {
-                                    }
+        # Generate App Instance, Storage Instance and Volume
+        # Volume ID will be used as the App Instance Name
+        # Storage Instance and Volumes will have standard names
+        app_params = (
+            {
+                'create_mode': "openstack",
+                'uuid': str(volume['id']),
+                'name': str(volume['id']),
+                'access_control_mode': self.allow_all_str,
+                'storage_instances': {
+                    DEFAULT_STORAGE_NAME: {
+                        'name': DEFAULT_STORAGE_NAME,
+                        'volumes': {
+                            DEFAULT_VOLUME_NAME: {
+                                'name': DEFAULT_VOLUME_NAME,
+                                'size': volume['size'],
+                                'replica_count': int(self.num_replicas),
+                                'snapshot_policies': {
                                 }
                             }
                         }
                     }
-                })
+                }
+            })
         self._create_resource(volume, URL_TEMPLATES['ai'], body=app_params)
 
     def extend_volume(self, volume, new_size):
-        template = self._get_template(volume)
-        if not template:
-            # Offline App Instance, if necessary
-            reonline = False
-            app_inst = self._issue_api_request(
-                URL_TEMPLATES['ai_inst'].format(volume['id']))
-            if app_inst['admin_state'] == 'online':
-                reonline = True
-                self.detach_volume(None, volume)
-            # Change Volume Size
-            app_inst = volume['id']
-            data = {
-                'size': new_size
-            }
-            self._issue_api_request(
-                URL_TEMPLATES['vol_inst'].format(app_inst),
-                method='put',
-                body=data)
-            # Online Volume, if it was online before
-            if reonline:
-                self.create_export(None, volume)
+        # Offline App Instance, if necessary
+        reonline = False
+        app_inst = self._issue_api_request(
+            URL_TEMPLATES['ai_inst'].format(volume['id']))
+        if app_inst['admin_state'] == 'online':
+            reonline = True
+            self.detach_volume(None, volume)
+        # Change Volume Size
+        app_inst = volume['id']
+        data = {
+            'size': new_size
+        }
+        self._issue_api_request(
+            URL_TEMPLATES['vol_inst'].format(app_inst),
+            method='put',
+            body=data)
+        # Online Volume, if it was online before
+        if reonline:
+            self.create_export(None, volume)
 
     def create_cloned_volume(self, volume, src_vref):
         src = "/" + URL_TEMPLATES['vol_inst'].format(src_vref['id'])
@@ -323,7 +297,6 @@ class DateraDriver(san.SanISCSIDriver):
 
     def initialize_connection(self, volume, connector):
         # Check if we've already setup everything for this volume
-        template = self._get_template(volume)
         url = (URL_TEMPLATES['si'].format(volume['id']))
         storage_instances = self._issue_api_request(url)
         # Handle adding initiator to product if necessary
@@ -372,7 +345,7 @@ class DateraDriver(san.SanISCSIDriver):
                                         method="put",
                                         body=data)
 
-        if not template and connector and connector.get('ip'):
+        if connector and connector.get('ip'):
             # Determine IP Pool from IP and update storage_instance
             try:
                 initiator_ip_pool_path = self._get_ip_pool_for_string_ip(
@@ -561,7 +534,6 @@ class DateraDriver(san.SanISCSIDriver):
             LOG.error(_LE('Failed to get updated stats from Datera Cluster.'))
 
         backend_name = self.configuration.safe_get('volume_backend_name')
-        template = self.datera_template
         stats = {
             'volume_backend_name': backend_name or 'Datera',
             'vendor_name': 'Datera',
@@ -571,9 +543,6 @@ class DateraDriver(san.SanISCSIDriver):
             'free_capacity_gb': int(results['available_capacity']) / units.Gi,
             'reserved_percentage': 0,
         }
-        # Add the datera template if necessary
-        if template != 'None':
-            stats['template'] = template
 
         self.cluster_stats = stats
 
