@@ -51,7 +51,7 @@ d_opts = [
                help='Datera API version.'),
     cfg.StrOpt('datera_num_replicas',
                default='3',
-               help='Number of replicas to create of a volume.'),
+               help='Number of replicas to create a volume.'),
     cfg.StrOpt('datera_503_timeout',
                default='120',
                help='Timeout for HTTP 503 retry messages'),
@@ -126,7 +126,7 @@ class DateraDriver(san.SanISCSIDriver):
         2.0 - Update For Datera API v2
         2.1 - Multipath, ACL and reorg
     """
-    VERSION = '2.0'
+    VERSION = '2.1'
 
     def __init__(self, *args, **kwargs):
         super(DateraDriver, self).__init__(*args, **kwargs)
