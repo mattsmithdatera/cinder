@@ -12,12 +12,6 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-"""
-:mod:`nexenta.iscsi` -- Driver to store volumes on Nexenta Appliance
-=====================================================================
-
-.. automodule:: nexenta.volume
-"""
 
 from oslo_log import log as logging
 from oslo_utils import units
@@ -289,7 +283,7 @@ class NexentaISCSIDriver(driver.ISCSIDriver):  # pylint: disable=R0921
         try:
             self.nef.delete(url)
         except exception.NexentaException as exc:
-            if 'EBUSY' is exc:
+            if 'EBUSY' in exc.args[0]:
                 LOG.warning(_LW(
                     'Could not delete snapshot %s - it has dependencies'),
                     snapshot['name'])
@@ -323,6 +317,10 @@ class NexentaISCSIDriver(driver.ISCSIDriver):  # pylint: disable=R0921
         }
         self.nef.post(url)
 
+        if (('size' in volume) and (
+                volume['size'] > snapshot['volume_size'])):
+            self.extend_volume(volume, volume['size'])
+
     def create_cloned_volume(self, volume, src_vref):
         """Creates a clone of the specified volume.
 
@@ -331,6 +329,7 @@ class NexentaISCSIDriver(driver.ISCSIDriver):  # pylint: disable=R0921
         """
         snapshot = {'volume_name': src_vref['name'],
                     'volume_id': src_vref['id'],
+                    'volume_size': src_vref['size'],
                     'name': self._get_clone_snapshot_name(volume)}
         LOG.debug('Creating temp snapshot of the original volume: '
                   '%s@%s', snapshot['volume_name'], snapshot['name'])
@@ -476,7 +475,13 @@ class NexentaISCSIDriver(driver.ISCSIDriver):  # pylint: disable=R0921
         targetgroup_name = self._get_targetgroup_name(volume)
         url = 'san/targetgroups/%s/luns/%s' % (
             targetgroup_name, lun_id)
-        self.nef.delete(url)
+        try:
+            self.nef.delete(url)
+        except exception.NexentaException as exc:
+            if 'No such logical unit in target group' in exc.args[0]:
+                LOG.debug('LU already deleted from appliance')
+            else:
+                raise
 
     def get_volume_stats(self, refresh=False):
         """Get volume stats.
@@ -497,9 +502,9 @@ class NexentaISCSIDriver(driver.ISCSIDriver):  # pylint: disable=R0921
             'group': self.volume_group,
         }
         stats = self.nef.get(url)
-        total_amount = utils.str2gib_size(
-            stats['bytesAvailable'] + stats['bytesUsed'])
-        free_amount = utils.str2gib_size(stats['bytesAvailable'])
+        total_amount = utils.str2gib_size(stats['bytesAvailable'])
+        free_amount = utils.str2gib_size(
+            stats['bytesAvailable'] - stats['bytesUsed'])
 
         location_info = '%(driver)s:%(host)s:%(pool)s/%(group)s' % {
             'driver': self.__class__.__name__,

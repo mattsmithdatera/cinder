@@ -17,7 +17,6 @@ import webob
 
 from cinder.api import extensions
 from cinder.api.openstack import wsgi
-from cinder.api import xmlutil
 from cinder import db
 from cinder.db.sqlalchemy import api as sqlalchemy_api
 from cinder import exception
@@ -39,18 +38,6 @@ authorize_show = extensions.extension_authorizer('volume', 'quotas:show')
 authorize_delete = extensions.extension_authorizer('volume', 'quotas:delete')
 
 
-class QuotaTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('quota_set', selector='quota_set')
-        root.set('id')
-
-        for resource in QUOTAS.resources:
-            elem = xmlutil.SubTemplateElement(root, resource)
-            elem.text = resource
-
-        return xmlutil.MasterTemplate(root, 1)
-
-
 class QuotaSetsController(wsgi.Controller):
 
     def _format_quota_set(self, project_id, quota_set):
@@ -69,6 +56,8 @@ class QuotaSetsController(wsgi.Controller):
         if QUOTAS.using_nested_quotas():
             used += v.get('allocated', 0)
         if value < used:
+            # TODO(mc_nair): after N opens, update error message to include
+            # the current usage and requested limit
             msg = _("Quota %s limit must be equal or greater than existing "
                     "resources.") % key
             raise webob.exc.HTTPBadRequest(explanation=msg)
@@ -153,7 +142,6 @@ class QuotaSetsController(wsgi.Controller):
                     return True
         return False
 
-    @wsgi.serializers(xml=QuotaTemplate)
     def show(self, req, id):
         """Show quota for a particular tenant
 
@@ -163,7 +151,7 @@ class QuotaSetsController(wsgi.Controller):
         a show.
 
         :param req: request
-        :param id: target project id that needs to be updated
+        :param id: target project id that needs to be shown
         """
         context = req.environ['cinder.context']
         authorize_show(context)
@@ -195,7 +183,6 @@ class QuotaSetsController(wsgi.Controller):
         quotas = self._get_quotas(context, target_project_id, usage)
         return self._format_quota_set(target_project_id, quotas)
 
-    @wsgi.serializers(xml=QuotaTemplate)
     def update(self, req, id, body):
         """Update Quota for a particular tenant
 
@@ -269,7 +256,7 @@ class QuotaSetsController(wsgi.Controller):
             if key in NON_QUOTA_KEYS:
                 continue
 
-            value = self.validate_integer(
+            value = utils.validate_integer(
                 body['quota_set'][key], key, min_value=-1,
                 max_value=db.MAX_INT)
 
@@ -285,7 +272,7 @@ class QuotaSetsController(wsgi.Controller):
                 except exception.OverQuota as e:
                     if reservations:
                         db.reservation_rollback(context, reservations)
-                    raise webob.exc.HTTPBadRequest(explanation=e.message)
+                    raise webob.exc.HTTPBadRequest(explanation=e.msg)
 
             valid_quotas[key] = value
 
@@ -335,7 +322,6 @@ class QuotaSetsController(wsgi.Controller):
 
         return reservations
 
-    @wsgi.serializers(xml=QuotaTemplate)
     def defaults(self, req, id):
         context = req.environ['cinder.context']
         authorize_show(context)
@@ -343,7 +329,6 @@ class QuotaSetsController(wsgi.Controller):
         return self._format_quota_set(id, QUOTAS.get_defaults(
             context, project_id=id))
 
-    @wsgi.serializers(xml=QuotaTemplate)
     def delete(self, req, id):
         """Delete Quota for a particular tenant.
 
@@ -352,7 +337,7 @@ class QuotaSetsController(wsgi.Controller):
         CLOUD admin are able to perform a delete.
 
         :param req: request
-        :param id: target project id that needs to be updated
+        :param id: target project id that needs to be deleted
         """
         context = req.environ['cinder.context']
         authorize_delete(context)
@@ -378,16 +363,6 @@ class QuotaSetsController(wsgi.Controller):
         target_project = quota_utils.get_project_hierarchy(
             ctxt, proj_id)
         parent_id = target_project.parent_id
-        # If the project which is being deleted has allocated part of its
-        # quota to its subprojects, then subprojects' quotas should be
-        # deleted first.
-        for res, value in project_quotas.items():
-            if 'allocated' in project_quotas[res].keys():
-                if project_quotas[res]['allocated'] != 0:
-                    msg = _("About to delete child projects having "
-                            "non-zero quota. This should not be performed")
-                    raise webob.exc.HTTPBadRequest(explanation=msg)
-
         if parent_id:
             # Get the children of the project which the token is scoped to
             # in order to know if the target_project is in its hierarchy.
@@ -397,16 +372,30 @@ class QuotaSetsController(wsgi.Controller):
                                              target_project.id,
                                              parent_id)
 
-            try:
-                db.quota_destroy_by_project(ctxt, target_project.id)
-            except exception.AdminRequired:
-                raise webob.exc.HTTPForbidden()
+        defaults = QUOTAS.get_defaults(ctxt, proj_id)
+        # If the project which is being deleted has allocated part of its
+        # quota to its subprojects, then subprojects' quotas should be
+        # deleted first.
+        for res, value in project_quotas.items():
+            if 'allocated' in project_quotas[res].keys():
+                if project_quotas[res]['allocated'] > 0:
+                    msg = _("About to delete child projects having "
+                            "non-zero quota. This should not be performed")
+                    raise webob.exc.HTTPBadRequest(explanation=msg)
+            # Ensure quota usage wouldn't exceed limit on a delete
+            self._validate_existing_resource(
+                res, defaults[res], project_quotas)
 
-            for res, limit in project_quotas.items():
-                # Update child limit to 0 so the parent hierarchy gets it's
-                # allocated values updated properly
-                self._update_nested_quota_allocated(
-                    ctxt, target_project, project_quotas, res, 0)
+        try:
+            db.quota_destroy_by_project(ctxt, target_project.id)
+        except exception.AdminRequired:
+            raise webob.exc.HTTPForbidden()
+
+        for res, limit in project_quotas.items():
+            # Update child limit to 0 so the parent hierarchy gets it's
+            # allocated values updated properly
+            self._update_nested_quota_allocated(
+                ctxt, target_project, project_quotas, res, 0)
 
     def validate_setup_for_nested_quota_use(self, req):
         """Validates that the setup supports using nested quotas.
@@ -430,7 +419,6 @@ class Quotas(extensions.ExtensionDescriptor):
 
     name = "Quotas"
     alias = "os-quota-sets"
-    namespace = "http://docs.openstack.org/volume/ext/quotas-sets/api/v1.1"
     updated = "2011-08-08T00:00:00+00:00"
 
     def get_resources(self):

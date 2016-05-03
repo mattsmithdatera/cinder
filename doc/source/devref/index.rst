@@ -34,8 +34,11 @@ Programming HowTos and Tutorials
     drivers
     gmr
     replication
+    user_messages
     migration
     api.apache
+    rolling.upgrades
+    genconfig
 
 Background Concepts for Cinder
 ------------------------------
@@ -43,6 +46,7 @@ Background Concepts for Cinder
    :maxdepth: 3
 
    architecture
+   attach_detach_conventions
    threading
    i18n
    rpc

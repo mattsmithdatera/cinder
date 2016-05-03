@@ -499,6 +499,11 @@ class NetAppESeriesLibrary(object):
         if storage_pool:
             return storage_pool.get('label')
 
+    def _add_volume_to_consistencygroup(self, volume):
+        if volume.get('consistencygroup_id'):
+            es_cg = self._get_consistencygroup(volume['consistencygroup'])
+            self._update_consistency_group_members(es_cg, [volume], [])
+
     def create_volume(self, volume):
         """Creates a volume."""
 
@@ -520,6 +525,8 @@ class NetAppESeriesLibrary(object):
         size_gb = int(volume['size'])
         self._create_volume(eseries_pool_label, eseries_volume_label, size_gb,
                             extra_specs)
+
+        self._add_volume_to_consistencygroup(volume)
 
     def _create_volume(self, eseries_pool_label, eseries_volume_label,
                        size_gb, extra_specs=None):
@@ -665,6 +672,8 @@ class NetAppESeriesLibrary(object):
         cinder_utils.synchronized(snapshot['id'])(
             self._create_volume_from_snapshot)(volume, es_snapshot)
 
+        self._add_volume_to_consistencygroup(volume)
+
     def _copy_volume_high_priority_readonly(self, src_vol, dst_vol):
         """Copies src volume to dest volume."""
         LOG.info(_LI("Copying src vol %(src)s to dest vol %(dst)s."),
@@ -711,6 +720,7 @@ class NetAppESeriesLibrary(object):
 
         try:
             self._create_volume_from_snapshot(volume, es_snapshot)
+            self._add_volume_to_consistencygroup(volume)
         finally:
             try:
                 self._client.delete_snapshot_group(es_snapshot['pitGroupRef'])
@@ -910,7 +920,7 @@ class NetAppESeriesLibrary(object):
 
         :param snapshot: The Cinder snapshot
         :param group_name: An optional label for the snapshot group
-        :return An E-Series snapshot image
+        :returns: An E-Series snapshot image
         """
 
         os_vol = snapshot['volume']
@@ -1117,6 +1127,9 @@ class NetAppESeriesLibrary(object):
         The target_wwn can be a single entry or a list of wwns that
         correspond to the list of remote wwn(s) that will export the volume.
         Example return values:
+
+        .. code-block:: python
+
             {
                 'driver_volume_type': 'fibre_channel'
                 'data': {
@@ -1130,7 +1143,9 @@ class NetAppESeriesLibrary(object):
                 }
             }
 
-            or
+        or
+
+        .. code-block:: python
 
              {
                 'driver_volume_type': 'fibre_channel'

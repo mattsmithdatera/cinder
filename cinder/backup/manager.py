@@ -61,9 +61,11 @@ backup_manager_opts = [
                default='cinder.backup.drivers.swift',
                help='Driver to use for backups.',),
     cfg.BoolOpt('backup_service_inithost_offload',
-                default=False,
+                default=True,
                 help='Offload pending backup delete during '
-                     'backup service startup.',),
+                     'backup service startup. If false, the backup service '
+                     'will remain down until all pending backups are '
+                     'deleted.',),
 ]
 
 # This map doesn't need to be extended in the future since it's only
@@ -81,7 +83,7 @@ QUOTAS = quota.QUOTAS
 class BackupManager(manager.SchedulerDependentManager):
     """Manages backup of block storage devices."""
 
-    RPC_API_VERSION = '1.3'
+    RPC_API_VERSION = '2.0'
 
     target = messaging.Target(version=RPC_API_VERSION)
 
@@ -93,6 +95,7 @@ class BackupManager(manager.SchedulerDependentManager):
         self.volume_rpcapi = volume_rpcapi.VolumeAPI()
         super(BackupManager, self).__init__(service_name='backup',
                                             *args, **kwargs)
+        self.additional_endpoints.append(_BackupV1Proxy(self))
 
     @property
     def driver_name(self):
@@ -191,7 +194,7 @@ class BackupManager(manager.SchedulerDependentManager):
                 # from being blocked.
                 self._add_to_threadpool(self.delete_backup, ctxt, backup)
             else:
-                # By default, delete backups sequentially
+                # Delete backups sequentially
                 self.delete_backup(ctxt, backup)
 
     def _detach_all_attachments(self, ctxt, volume):
@@ -855,3 +858,36 @@ class BackupManager(manager.SchedulerDependentManager):
         rpcapi = self.volume_rpcapi
         rpcapi.terminate_connection(context, volume, properties, force=force)
         rpcapi.remove_export(context, volume)
+
+
+# TODO(dulek): This goes away immediately in Newton and is just present in
+# Mitaka so that we can receive v1.x and v2.0 messages.
+class _BackupV1Proxy(object):
+
+    target = messaging.Target(version='1.3')
+
+    def __init__(self, manager):
+        self.manager = manager
+
+    def create_backup(self, context, backup):
+        return self.manager.create_backup(context, backup)
+
+    def restore_backup(self, context, backup, volume_id):
+        return self.manager.restore_backup(context, backup, volume_id)
+
+    def delete_backup(self, context, backup):
+        return self.manager.delete_backup(context, backup)
+
+    def export_record(self, context, backup):
+        return self.manager.export_record(context, backup)
+
+    def import_record(self, context, backup, backup_service, backup_url,
+                      backup_hosts):
+        return self.manager.import_record(context, backup, backup_service,
+                                          backup_url, backup_hosts)
+
+    def reset_status(self, context, backup, status):
+        return self.manager.reset_status(context, backup, status)
+
+    def check_support_to_force_delete(self, context):
+        return self.manager.check_support_to_force_delete(context)

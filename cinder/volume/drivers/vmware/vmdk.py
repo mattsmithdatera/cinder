@@ -67,6 +67,9 @@ EXTRA_CONFIG_VOLUME_ID_KEY = "cinder.volume.id"
 vmdk_opts = [
     cfg.StrOpt('vmware_host_ip',
                help='IP address for connecting to VMware vCenter server.'),
+    cfg.PortOpt('vmware_host_port',
+                default=443,
+                help='Port number for connecting to VMware vCenter server.'),
     cfg.StrOpt('vmware_host_username',
                help='Username for authenticating with VMware vCenter '
                     'server.'),
@@ -213,7 +216,8 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
     # 1.3.0 - support for volume backup/restore
     # 1.4.0 - support for volume retype
     # 1.5.0 - restrict volume placement to specific vCenter clusters
-    VERSION = '1.5.0'
+    # 1.6.0 - support for manage existing
+    VERSION = '1.6.0'
 
     # Minimum supported vCenter version.
     MIN_SUPPORTED_VC_VERSION = dist_version.LooseVersion('5.1')
@@ -254,7 +258,8 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
                            'vmware_host_password']
         for param in required_params:
             if not getattr(self.configuration, param, None):
-                raise exception.InvalidInput(_("%s not set.") % param)
+                reason = _("%s not set.") % param
+                raise exception.InvalidInput(reason=reason)
 
     def check_for_setup_error(self):
         pass
@@ -547,11 +552,15 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
         """Allow connection to connector and return connection info.
 
         The implementation returns the following information:
-        {'driver_volume_type': 'vmdk'
-         'data': {'volume': $VOLUME_MOREF_VALUE
-                  'volume_id': $VOLUME_ID
-                 }
-        }
+
+        .. code-block:: json
+
+            {
+                'driver_volume_type': 'vmdk'
+                'data': {'volume': $VOLUME_MOREF_VALUE
+                         'volume_id': $VOLUME_ID
+                        }
+            }
 
         :param volume: Volume object
         :param connector: Connector information
@@ -664,6 +673,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
 
         timeout = self.configuration.vmware_image_transfer_timeout_secs
         host_ip = self.configuration.vmware_host_ip
+        port = self.configuration.vmware_host_port
         ca_file = self.configuration.vmware_ca_file
         insecure = self.configuration.vmware_insecure
         cookies = self.session.vim.client.options.transport.cookiejar
@@ -672,7 +682,6 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
         LOG.debug("Copying image: %(image_id)s to %(path)s.",
                   {'image_id': image_id,
                    'path': upload_file_path})
-        # TODO(vbala): add config option to override non-default port
 
         # ca_file is used for verifying vCenter certificate if it is set.
         # If ca_file is unset and insecure is False, the default CA truststore
@@ -686,7 +695,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
                                            image_id,
                                            image_size=image_size_in_bytes,
                                            host=host_ip,
-                                           port=443,
+                                           port=port,
                                            data_center_name=dc_name,
                                            datastore_name=ds_name,
                                            cookies=cookies,
@@ -938,7 +947,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
 
             if disk_conversion:
                 # Clone the temporary backing for disk type conversion.
-                (host, rp, _folder, summary) = self._select_ds_for_volume(
+                (host, rp, folder, summary) = self._select_ds_for_volume(
                     volume)
                 datastore = summary.datastore
                 LOG.debug("Cloning temporary backing: %s for disk type "
@@ -948,9 +957,10 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
                                                      None,
                                                      volumeops.FULL_CLONE_TYPE,
                                                      datastore,
-                                                     disk_type,
-                                                     host,
-                                                     rp)
+                                                     disk_type=disk_type,
+                                                     host=host,
+                                                     resource_pool=rp,
+                                                     folder=folder)
                 self._delete_temp_backing(backing)
                 backing = clone
             self.volumeops.update_backing_disk_uuid(backing, volume['id'])
@@ -1014,6 +1024,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
             # fetching image from glance will also create the backing
             timeout = self.configuration.vmware_image_transfer_timeout_secs
             host_ip = self.configuration.vmware_host_ip
+            port = self.configuration.vmware_host_port
             LOG.debug("Fetching glance image: %(id)s to server: %(host)s.",
                       {'id': image_id, 'host': host_ip})
             backing = image_transfer.download_stream_optimized_image(
@@ -1023,7 +1034,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
                 image_id,
                 session=self.session,
                 host=host_ip,
-                port=443,
+                port=port,
                 resource_pool=rp,
                 vm_folder=folder,
                 vm_import_spec=vm_import_spec,
@@ -1139,9 +1150,9 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
         has a vmdk disk type of "streamOptimized" that can only be downloaded
         using the HttpNfc API.
         Steps followed are:
-        1. Get the name of the vmdk file which the volume points to right now.
-           Can be a chain of snapshots, so we need to know the last in the
-           chain.
+        1. Get the name of the vmdk file which the volume points to right
+        now. Can be a chain of snapshots, so we need to know the last in the
+        chain.
         2. Use Nfc APIs to upload the contents of the vmdk file to glance.
         """
 
@@ -1167,6 +1178,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
         # Upload image from vmdk
         timeout = self.configuration.vmware_image_transfer_timeout_secs
         host_ip = self.configuration.vmware_host_ip
+        port = self.configuration.vmware_host_port
 
         image_transfer.upload_image(context,
                                     timeout,
@@ -1175,7 +1187,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
                                     volume['project_id'],
                                     session=self.session,
                                     host=host_ip,
-                                    port=443,
+                                    port=port,
                                     vm=backing,
                                     vmdk_file_path=vmdk_file_path,
                                     vmdk_size=volume['size'] * units.Gi,
@@ -1287,6 +1299,8 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
                 return False
 
             (host, rp, summary) = best_candidate
+            dc = self.volumeops.get_dc(rp)
+            folder = self._get_volume_group_folder(dc, volume['project_id'])
             new_datastore = summary.datastore
             if datastore.value != new_datastore.value:
                 # Datastore changed; relocate the backing.
@@ -1294,10 +1308,6 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
                           backing)
                 self.volumeops.relocate_backing(
                     backing, new_datastore, rp, host, new_disk_type)
-
-                dc = self.volumeops.get_dc(rp)
-                folder = self._get_volume_group_folder(dc,
-                                                       volume['project_id'])
                 self.volumeops.move_backing_to_folder(backing, folder)
             elif need_disk_type_conversion:
                 # Same datastore, but clone is needed for disk type conversion.
@@ -1313,8 +1323,9 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
 
                     new_backing = self.volumeops.clone_backing(
                         volume['name'], backing, None,
-                        volumeops.FULL_CLONE_TYPE, datastore, new_disk_type,
-                        host, rp)
+                        volumeops.FULL_CLONE_TYPE, datastore,
+                        disk_type=new_disk_type, host=host,
+                        resource_pool=rp, folder=folder)
                     self.volumeops.update_backing_disk_uuid(new_backing,
                                                             volume['id'])
                     self._delete_temp_backing(backing)
@@ -1431,6 +1442,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
         """Download virtual disk in streamOptimized format."""
         timeout = self.configuration.vmware_image_transfer_timeout_secs
         host_ip = self.configuration.vmware_host_ip
+        port = self.configuration.vmware_host_port
         vmdk_ds_file_path = self.volumeops.get_vmdk_path(backing)
 
         with open(tmp_file_path, "wb") as tmp_file:
@@ -1440,7 +1452,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
                 tmp_file,
                 session=self.session,
                 host=host_ip,
-                port=443,
+                port=port,
                 vm=backing,
                 vmdk_file_path=vmdk_ds_file_path,
                 vmdk_size=volume['size'] * units.Gi)
@@ -1505,6 +1517,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
 
         timeout = self.configuration.vmware_image_transfer_timeout_secs
         host_ip = self.configuration.vmware_host_ip
+        port = self.configuration.vmware_host_port
         try:
             with open(tmp_file_path, "rb") as tmp_file:
                 vm_ref = image_transfer.download_stream_optimized_data(
@@ -1513,7 +1526,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
                     tmp_file,
                     session=self.session,
                     host=host_ip,
-                    port=443,
+                    port=port,
                     resource_pool=rp,
                     vm_folder=folder,
                     vm_import_spec=vm_import_spec,
@@ -1554,13 +1567,15 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
         renamed = False
         try:
             # Find datastore for clone.
-            (host, rp, _folder, summary) = self._select_ds_for_volume(volume)
+            (host, rp, folder, summary) = self._select_ds_for_volume(volume)
             datastore = summary.datastore
 
             disk_type = VMwareVcVmdkDriver._get_disk_type(volume)
             dest = self.volumeops.clone_backing(dest_name, src, None,
                                                 volumeops.FULL_CLONE_TYPE,
-                                                datastore, disk_type, host, rp)
+                                                datastore, disk_type=disk_type,
+                                                host=host, resource_pool=rp,
+                                                folder=folder)
             self.volumeops.update_backing_disk_uuid(dest, volume['id'])
             if new_backing:
                 LOG.debug("Created new backing: %s for restoring backup.",
@@ -1689,7 +1704,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
 
         :param volume: Cinder volume to manage
         :param existing_ref: Driver-specific information used to identify a
-        volume
+                             volume
         """
         (_vm, disk) = self._get_existing(existing_ref)
         return int(math.ceil(disk.capacityInKB * units.Ki / float(units.Gi)))
@@ -1702,7 +1717,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
 
         :param volume: Cinder volume to manage
         :param existing_ref: Driver-specific information used to identify a
-        volume
+                             volume
         """
         (vm, disk) = self._get_existing(existing_ref)
 
@@ -1737,6 +1752,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
     def session(self):
         if not self._session:
             ip = self.configuration.vmware_host_ip
+            port = self.configuration.vmware_host_port
             username = self.configuration.vmware_host_username
             password = self.configuration.vmware_host_password
             api_retry_count = self.configuration.vmware_api_retry_count
@@ -1750,6 +1766,7 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
                                                  task_poll_interval,
                                                  wsdl_loc=wsdl_loc,
                                                  pbm_wsdl_loc=pbm_wsdl,
+                                                 port=port,
                                                  cacert=ca_file,
                                                  insecure=insecure)
         return self._session
@@ -1926,15 +1943,17 @@ class VMwareVcVmdkDriver(driver.VolumeDriver):
         datastore = None
         host = None
         rp = None
+        folder = None
         if not clone_type == volumeops.LINKED_CLONE_TYPE:
             # Pick a datastore where to create the full clone under any host
-            (host, rp, _folder, summary) = self._select_ds_for_volume(volume)
+            (host, rp, folder, summary) = self._select_ds_for_volume(volume)
             datastore = summary.datastore
         extra_config = self._get_extra_config(volume)
         clone = self.volumeops.clone_backing(volume['name'], backing,
                                              snapshot, clone_type, datastore,
                                              host=host, resource_pool=rp,
-                                             extra_config=extra_config)
+                                             extra_config=extra_config,
+                                             folder=folder)
         self.volumeops.update_backing_disk_uuid(clone, volume['id'])
         # If the volume size specified by the user is greater than
         # the size of the source volume, the newly created volume will

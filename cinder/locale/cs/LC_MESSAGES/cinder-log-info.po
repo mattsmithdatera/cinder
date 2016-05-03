@@ -5,11 +5,12 @@
 # Translators:
 # OpenStack Infra <zanata@openstack.org>, 2015. #zanata
 # Zbyněk Schwarz <zbynek.schwarz@gmail.com>, 2015. #zanata
+# Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: cinder 8.0.0.0b3.dev248\n"
-"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2016-02-22 23:21+0000\n"
+"Project-Id-Version: cinder 8.0.1.dev161\n"
+"Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
+"POT-Creation-Date: 2016-04-23 16:54+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -152,14 +153,6 @@ msgstr "Přidávání svazků do skupiny jednotnosti %s."
 
 msgid "Attach volume completed successfully."
 msgstr "Připojení svazku úspěšně dokončeno."
-
-#, python-format
-msgid "Attempting to promote secondary replica to primary for volume %s."
-msgstr "Pokus o povýšení druhotné repliky na hlavní pro svazek %s."
-
-#, python-format
-msgid "Attempting to sync secondary replica with primary for volume %s."
-msgstr "Pokus o synchronizaci druhotné repliky s hlavní pro svazek %s."
 
 msgid "Availability Zones retrieved successfully."
 msgstr "Zóny dostupnosti úspěšně získány."
@@ -323,6 +316,14 @@ msgid "Cinder secure environment indicator file exists."
 msgstr "Soubor indikující bezpečné prostředí Cinder existuje."
 
 #, python-format
+msgid "CiscoFCZoneDriver - Add connection for I-T map: %s"
+msgstr "CiscoFCZoneDriver - Přidáno připojení pro mapu I-T: %s"
+
+#, python-format
+msgid "CiscoFCZoneDriver - Delete connection for I-T map: %s"
+msgstr "CiscoFCZoneDriver - Smazáno připojení pro mapu I-T: %s"
+
+#, python-format
 msgid "Cleaning cache for share %s."
 msgstr "Čištění mezipaměti pro sídlení %s."
 
@@ -410,6 +411,10 @@ msgstr "Připojování k hostiteli %s."
 msgid "Connecting to target host: %s for backend enabled migration."
 msgstr ""
 "Připojování k cílovému hostiteli %s pro přesun za pomoci podpůrné vrstvy."
+
+#, python-format
+msgid "Connector returning fcnsinfo-%s"
+msgstr "Konektor vrací fcnsinfo-%s"
 
 #, python-format
 msgid "Consistency group %(cg)s is created successfully."
@@ -1027,9 +1032,6 @@ msgid "Enabling LVM thin provisioning by default because no LVs exist."
 msgstr ""
 "Protože neexistují žádné LV, je standardně povoleno mělké poskytování LVM."
 
-msgid "Enter initialize_connection."
-msgstr "Vstup do zavedení spojení."
-
 #, python-format
 msgid "Entering extend_volume volume=%(vol)s new_size=%(size)s"
 msgstr "Spouštění rozšíření svazku %(vol)s, nová velikost=%(size)s"
@@ -1120,6 +1122,10 @@ msgstr "Získaná verze serveru vCenter: %s"
 #, python-format
 msgid "Filter %(cls_name)s returned %(obj_len)d host(s)"
 msgstr "Filtr %(cls_name)s vrátil %(obj_len)d hostitelů"
+
+#, python-format
+msgid "Filtered targets for SAN is: %s"
+msgstr "Filtrované cíle pro SAN jsou: %s"
 
 #, python-format
 msgid "Fixing previous mount %s which was not unmounted correctly."
@@ -1750,10 +1756,6 @@ msgstr ""
 #, python-format
 msgid "Resizing LUN %s directly to new size."
 msgstr "Měnění velikosti LUN %s přímo na její velikost."
-
-#, python-format
-msgid "Resizing LUN %s to new size using clone operation."
-msgstr "Velikosti LUN %s bude změněna pomocí operace klonování."
 
 #, python-format
 msgid "Resizing file to %sG"
@@ -2410,23 +2412,11 @@ msgstr ""
 "Pro snímek svazku %(snap)s neexistuje žádný bod snímku. Záloha pro svazek "
 "%(vol)s nebude vytvořena."
 
-#, python-format
-msgid "Toggle storage_vnx_ip_address from %(old)s to %(new)s."
-msgstr "IP adresa úložiště VNX přepnuta z %(old)s na %(new)s."
-
 msgid "Token is invalid, going to re-login and get a new one."
 msgstr "Známka je neplatná, přihlášení bude opakováno pro získání nového."
 
 msgid "Transfer volume completed successfully."
 msgstr "Přenos svazku úspěšně dokončen."
-
-#, python-format
-msgid ""
-"Tried to delete export for volume %s, but it was not found in the Datera "
-"cluster. Continuing with volume detach"
-msgstr ""
-"Pokus o smazání exportu svazku %s, který ale nebyl nalezen v clusteru "
-"Datera. Pokračuje se v odpojení svazku."
 
 #, python-format
 msgid "Tried to delete non-existent vdisk %s."
@@ -2467,12 +2457,13 @@ msgstr "Popisná data svazku nelze smazat, protože svazek je v režimu údržby
 msgid "Unable to detach volume, because it is in maintenance."
 msgstr "Nelze odpojit svazek, protože je v údržbě."
 
+msgid "Unable to get Cinder internal context, will not use image-volume cache."
+msgstr ""
+"Nelze získat vnitřní kontext Cinder, mezipaměť obrazu-svazku nebude použita."
+
 msgid ""
 "Unable to initialize the connection for volume, because it is in maintenance."
 msgstr "Nelze zavést připojení ke svazku, protože je v údržbě."
-
-msgid "Unable to parse XML input."
-msgstr "Nelze zpracovat vstup XML."
 
 #, python-format
 msgid "Unable to serialize field '%s' - excluding from backup"
@@ -2823,6 +2814,26 @@ msgid "ZFSSA version: %s"
 msgstr "Verze ZFSSA: %s"
 
 #, python-format
+msgid "Zone exists in I-T mode. Skipping zone creation %s"
+msgstr "Zóna existuje v režimu I-T. Vytváření zóny %s přeskočeno"
+
+#, python-format
+msgid "Zone map to add: %s"
+msgstr "Mapa zóny pro přidání: %s"
+
+#, python-format
+msgid "Zoning Policy: %s, not recognized"
+msgstr "Zásada zónování: %s nebylo rozpoznáno"
+
+#, python-format
+msgid "Zoning policy for Fabric %s"
+msgstr "Zásady zónování pro Fabric %s"
+
+#, python-format
+msgid "Zoning policy for fabric %s"
+msgstr "Zásady zónování pro Fabric %s"
+
+#, python-format
 msgid ""
 "_check_volume_copy_ops: Volume %(vol)s does not have the specified vdisk "
 "copy operation: orig=%(orig)s new=%(new)s."
@@ -2960,10 +2971,6 @@ msgid "initialize_connection, host lun id is: %s."
 msgstr "Zavedení spojení, id hostitele lun: %s."
 
 #, python-format
-msgid "initialize_connection, initiator: %(wwpns)s, volume name: %(volume)s."
-msgstr "Zavedení spojení: Zavaděč %(wwpns)s, název svazku: %(volume)s."
-
-#, python-format
 msgid ""
 "initialize_connection, iscsi_iqn: %(iscsi_iqn)s, target_ip: %(target_ip)s, "
 "portgroup_id: %(portgroup_id)s."
@@ -2986,10 +2993,6 @@ msgstr "Zavedení: Spojení %s"
 
 msgid "initiator has no password while using chap,adding it"
 msgstr "Zavaděč nemá žádné heslo při používání chap, heslo je přidáno"
-
-#, python-format
-msgid "initiator name: %(initiator_name)s, volume name: %(volume)s."
-msgstr "Název zavaděče: %(initiator_name)s, název svazku: %(volume)s."
 
 msgid ""
 "initiator_auto_registration: False. Initiator auto registration is not "
@@ -3078,22 +3081,6 @@ msgstr "Ukončení připojení se svazkem: %(volume)s, konektor: %(con)s"
 #, python-format
 msgid "terminate_connection, return data is: %s."
 msgstr "Ukončení spojení, vrácená data: %s."
-
-#, python-format
-msgid ""
-"terminate_connection: volume name: %(volume)s, initiator name: %(ini)s, "
-"lun_id: %(lunid)s."
-msgstr ""
-"Ukončení spojení: Název svazku %(volume)s, název zavaděče: %(ini)s, id lun: "
-"%(lunid)s."
-
-#, python-format
-msgid ""
-"terminate_connection: volume name: %(volume)s, wwpns: %(wwns)s, lun_id: "
-"%(lunid)s."
-msgstr ""
-"Ukončení spojení: Název svazku %(volume)s, wwpns: %(wwns)s, id lun: "
-"%(lunid)s."
 
 #, python-format
 msgid ""

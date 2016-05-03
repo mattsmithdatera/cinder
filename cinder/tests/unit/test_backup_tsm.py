@@ -30,6 +30,7 @@ from cinder import db
 from cinder import exception
 from cinder import objects
 from cinder import test
+from cinder.tests.unit import fake_constants as fake
 from cinder import utils
 
 SIM = None
@@ -258,21 +259,21 @@ class BackupTSMTestCase(test.TestCase):
         backup = {'id': backup_id,
                   'size': 1,
                   'container': 'test-container',
-                  'volume_id': '1234-5678-1234-8888',
+                  'volume_id': fake.VOLUME_ID,
                   'service_metadata': service_metadata,
-                  'user_id': 'user-id',
-                  'project_id': 'project-id',
+                  'user_id': fake.USER_ID,
+                  'project_id': fake.PROJECT_ID,
                   }
         return db.backup_create(self.ctxt, backup)['id']
 
     def test_backup_image(self):
-        volume_id = '1234-5678-1234-7777'
+        volume_id = fake.VOLUME_ID
         mode = 'image'
         self._create_volume_db_entry(volume_id)
 
-        backup_id1 = 123
-        backup_id2 = 456
-        backup_id3 = 666
+        backup_id1 = fake.BACKUP_ID
+        backup_id2 = fake.BACKUP2_ID
+        backup_id3 = fake.BACKUP3_ID
         self._create_backup_db_entry(backup_id1, mode)
         self._create_backup_db_entry(backup_id2, mode)
         self._create_backup_db_entry(backup_id3, mode)
@@ -299,26 +300,24 @@ class BackupTSMTestCase(test.TestCase):
             self.driver.delete(backup1)
 
     def test_backup_file(self):
-        volume_id = '1234-5678-1234-8888'
+        volume_id = fake.VOLUME_ID
         mode = 'file'
         self.stubs.Set(os, 'stat', fake_stat_file)
         self._create_volume_db_entry(volume_id)
 
-        backup_id1 = 123
-        backup_id2 = 456
-        self._create_backup_db_entry(backup_id1, mode)
-        self._create_backup_db_entry(backup_id2, mode)
+        self._create_backup_db_entry(fake.BACKUP_ID, mode)
+        self._create_backup_db_entry(fake.BACKUP2_ID, mode)
 
         with open(VOLUME_PATH, 'w+') as volume_file:
             # Create two backups of the volume
-            backup1 = objects.Backup.get_by_id(self.ctxt, 123)
+            backup1 = objects.Backup.get_by_id(self.ctxt, fake.BACKUP_ID)
             self.driver.backup(backup1, volume_file)
-            backup2 = objects.Backup.get_by_id(self.ctxt, 456)
+            backup2 = objects.Backup.get_by_id(self.ctxt, fake.BACKUP2_ID)
             self.driver.backup(backup2, volume_file)
 
             # Create a backup that fails
-            self._create_backup_db_entry(666, mode)
-            fail_back = objects.Backup.get_by_id(self.ctxt, 666)
+            self._create_backup_db_entry(fake.BACKUP3_ID, mode)
+            fail_back = objects.Backup.get_by_id(self.ctxt, fake.BACKUP3_ID)
             self.sim.error_injection('backup', 'fail')
             self.assertRaises(exception.InvalidBackup,
                               self.driver.backup, fail_back, volume_file)
@@ -332,17 +331,16 @@ class BackupTSMTestCase(test.TestCase):
             self.driver.delete(backup2)
 
     def test_backup_invalid_mode(self):
-        volume_id = '1234-5678-1234-9999'
+        volume_id = fake.VOLUME_ID
         mode = 'illegal'
         self.stubs.Set(os, 'stat', fake_stat_illegal)
         self._create_volume_db_entry(volume_id)
 
-        backup_id1 = 123
-        self._create_backup_db_entry(backup_id1, mode)
+        self._create_backup_db_entry(fake.BACKUP_ID, mode)
 
         with open(VOLUME_PATH, 'w+') as volume_file:
             # Create two backups of the volume
-            backup1 = objects.Backup.get_by_id(self.ctxt, 123)
+            backup1 = objects.Backup.get_by_id(self.ctxt, fake.BACKUP_ID)
             self.assertRaises(exception.InvalidBackup,
                               self.driver.backup, backup1, volume_file)
 

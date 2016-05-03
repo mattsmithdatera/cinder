@@ -46,15 +46,19 @@ REST_API_VERSION_HISTORY = """
 
     * 3.0 - Includes all V2 APIs and extensions. V1 API is still supported.
     * 3.0 - Versions API updated to reflect beginning of microversions epoch.
+    * 3.1 - Adds visibility and protected to _volume_upload_image parameters.
+    * 3.2 - Bootable filters in volume GET call no longer treats all values
+            passed to it as true.
+    * 3.3 - Add user messages APIs.
 
 """
 
 # The minimum and maximum versions of the API supported
 # The default api version request is defined to be the
-# the minimum version of the API supported.
+# minimum version of the API supported.
 # Explicitly using /v1 or /v2 enpoints will still work
 _MIN_API_VERSION = "3.0"
-_MAX_API_VERSION = "3.0"
+_MAX_API_VERSION = "3.3"
 _LEGACY_API_VERSION1 = "1.0"
 _LEGACY_API_VERSION2 = "2.0"
 
@@ -143,11 +147,21 @@ class APIVersionRequest(utils.ComparableMixin):
 
         if self.is_null():
             raise ValueError
-        if max_version.is_null() and min_version.is_null():
+
+        if isinstance(min_version, str):
+            min_version = APIVersionRequest(version_string=min_version)
+        if isinstance(max_version, str):
+            max_version = APIVersionRequest(version_string=max_version)
+
+        if not min_version and not max_version:
             return True
-        elif max_version.is_null():
+        elif ((min_version and max_version) and
+              max_version.is_null() and min_version.is_null()):
+            return True
+
+        elif not max_version or max_version.is_null():
             return min_version <= self
-        elif min_version.is_null():
+        elif not min_version or min_version.is_null():
             return self <= max_version
         else:
             return min_version <= self <= max_version

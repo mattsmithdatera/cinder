@@ -17,30 +17,17 @@ import webob
 
 from cinder.api import extensions
 from cinder.api.openstack import wsgi
-from cinder.api import xmlutil
 from cinder import db
 from cinder import exception
 from cinder.i18n import _
 from cinder import quota
+from cinder import utils
 
 
 QUOTAS = quota.QUOTAS
 
 
 authorize = extensions.extension_authorizer('volume', 'quota_classes')
-
-
-class QuotaClassTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('quota_class_set',
-                                       selector='quota_class_set')
-        root.set('id')
-
-        for resource in QUOTAS.resources:
-            elem = xmlutil.SubTemplateElement(root, resource)
-            elem.text = resource
-
-        return xmlutil.MasterTemplate(root, 1)
 
 
 class QuotaClassSetsController(wsgi.Controller):
@@ -52,7 +39,6 @@ class QuotaClassSetsController(wsgi.Controller):
 
         return dict(quota_class_set=quota_set)
 
-    @wsgi.serializers(xml=QuotaClassTemplate)
     def show(self, req, id):
         context = req.environ['cinder.context']
         authorize(context)
@@ -64,7 +50,6 @@ class QuotaClassSetsController(wsgi.Controller):
         return self._format_quota_set(id,
                                       QUOTAS.get_class_quotas(context, id))
 
-    @wsgi.serializers(xml=QuotaClassTemplate)
     def update(self, req, id, body):
         context = req.environ['cinder.context']
         authorize(context)
@@ -80,8 +65,8 @@ class QuotaClassSetsController(wsgi.Controller):
         for key, value in body['quota_class_set'].items():
             if key in QUOTAS:
                 try:
-                    value = self.validate_integer(value, key, min_value=-1,
-                                                  max_value=db.MAX_INT)
+                    value = utils.validate_integer(value, key, min_value=-1,
+                                                   max_value=db.MAX_INT)
                     db.quota_class_update(context, quota_class, key, value)
                 except exception.QuotaClassNotFound:
                     db.quota_class_create(context, quota_class, key, value)
@@ -96,8 +81,6 @@ class Quota_classes(extensions.ExtensionDescriptor):
 
     name = "QuotaClasses"
     alias = "os-quota-class-sets"
-    namespace = ("http://docs.openstack.org/volume/ext/"
-                 "quota-classes-sets/api/v1.1")
     updated = "2012-03-12T00:00:00+00:00"
 
     def get_resources(self):

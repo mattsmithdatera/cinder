@@ -51,13 +51,8 @@ from cinder.tests import fixtures as cinder_fixtures
 from cinder.tests.unit import conf_fixture
 from cinder.tests.unit import fake_notifier
 
-test_opts = [
-    cfg.StrOpt('sqlite_clean_db',
-               default='clean.sqlite',
-               help='File name of clean sqlite db'), ]
 
 CONF = cfg.CONF
-CONF.register_opts(test_opts)
 
 LOG = log.getLogger(__name__)
 
@@ -104,29 +99,6 @@ class Database(fixtures.Fixture):
             shutil.copyfile(
                 os.path.join(CONF.state_path, self.sqlite_clean_db),
                 os.path.join(CONF.state_path, self.sqlite_db))
-
-
-def _patch_mock_to_raise_for_invalid_assert_calls():
-    def raise_for_invalid_assert_calls(wrapped):
-        def wrapper(_self, name):
-            valid_asserts = [
-                'assert_called_with',
-                'assert_called_once_with',
-                'assert_has_calls',
-                'assert_any_call']
-
-            if name.startswith('assert') and name not in valid_asserts:
-                raise AttributeError('%s is not a valid mock assert method'
-                                     % name)
-
-            return wrapped(_self, name)
-        return wrapper
-    mock.Mock.__getattr__ = raise_for_invalid_assert_calls(
-        mock.Mock.__getattr__)
-
-# NOTE(gibi): needs to be called only once at import time
-# to patch the mock lib
-_patch_mock_to_raise_for_invalid_assert_calls()
 
 
 class TestCase(testtools.TestCase):
@@ -188,6 +160,14 @@ class TestCase(testtools.TestCase):
         self.useFixture(self.messaging_conf)
         rpc.init(CONF)
 
+        # NOTE(geguileo): This is required because _determine_obj_version_cap
+        # and _determine_rpc_version_cap functions in cinder.rpc.RPCAPI cache
+        # versions in LAST_RPC_VERSIONS and LAST_OBJ_VERSIONS so we may have
+        # weird interactions between tests if we don't clear them before each
+        # test.
+        rpc.LAST_OBJ_VERSIONS = {}
+        rpc.LAST_RPC_VERSIONS = {}
+
         conf_fixture.set_defaults(CONF)
         CONF([], default_config_files=[])
 
@@ -204,7 +184,7 @@ class TestCase(testtools.TestCase):
             _DB_CACHE = Database(sqla_api, migration,
                                  sql_connection=CONF.database.connection,
                                  sqlite_db=CONF.database.sqlite_db,
-                                 sqlite_clean_db=CONF.sqlite_clean_db)
+                                 sqlite_clean_db='clean.sqlite')
         self.useFixture(_DB_CACHE)
 
         # NOTE(danms): Make sure to reset us back to non-remote objects
@@ -247,6 +227,7 @@ class TestCase(testtools.TestCase):
                              group='oslo_policy')
 
         self._disable_osprofiler()
+        self._disallow_invalid_uuids()
 
         # NOTE(geguileo): This is required because common get_by_id method in
         # cinder.db.sqlalchemy.api caches get methods and if we use a mocked
@@ -268,6 +249,17 @@ class TestCase(testtools.TestCase):
         mock_decorator = mock.MagicMock(side_effect=side_effect)
         p = mock.patch("osprofiler.profiler.trace_cls",
                        return_value=mock_decorator)
+        p.start()
+
+    def _disallow_invalid_uuids(self):
+        def catch_uuid_warning(message, *args, **kwargs):
+            ovo_message = "invalid UUID. Using UUIDFields with invalid UUIDs " \
+                          "is no longer supported"
+            if ovo_message in message:
+                raise AssertionError(message)
+
+        p = mock.patch("warnings.warn",
+                       side_effect=catch_uuid_warning)
         p.start()
 
     def _common_cleanup(self):

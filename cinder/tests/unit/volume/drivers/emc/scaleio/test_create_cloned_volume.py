@@ -19,6 +19,7 @@ from six.moves import urllib
 
 from cinder import context
 from cinder import exception
+from cinder.tests.unit import fake_constants as fake
 from cinder.tests.unit import fake_volume
 from cinder.tests.unit.volume.drivers.emc import scaleio
 from cinder.tests.unit.volume.drivers.emc.scaleio import mocks
@@ -35,7 +36,7 @@ class TestCreateClonedVolume(scaleio.TestScaleIODriver):
         ctx = context.RequestContext('fake', 'fake', auth_token=True)
 
         self.src_volume = fake_volume.fake_volume_obj(
-            ctx, **{'provider_id': 'pid001'})
+            ctx, **{'provider_id': fake.PROVIDER_ID})
 
         self.src_volume_name_2x_enc = urllib.parse.quote(
             urllib.parse.quote(
@@ -97,4 +98,9 @@ class TestCreateClonedVolume(scaleio.TestScaleIODriver):
 
     def test_create_cloned_volume(self):
         self.set_https_response_mode(self.RESPONSE_MODE.Valid)
+        self.driver.create_cloned_volume(self.new_volume, self.src_volume)
+
+    def test_create_cloned_volume_larger_size(self):
+        self.set_https_response_mode(self.RESPONSE_MODE.Valid)
+        self.new_volume.size = 2
         self.driver.create_cloned_volume(self.new_volume, self.src_volume)

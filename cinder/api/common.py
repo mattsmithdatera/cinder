@@ -23,9 +23,10 @@ from oslo_log import log as logging
 from six.moves import urllib
 import webob
 
-from cinder.api.openstack import wsgi
-from cinder.api import xmlutil
+from cinder.common import constants
+from cinder import exception
 from cinder.i18n import _
+import cinder.policy
 from cinder import utils
 
 
@@ -56,9 +57,6 @@ CONF.register_opts(api_common_opts)
 LOG = logging.getLogger(__name__)
 
 
-XML_NS_V1 = 'http://docs.openstack.org/api/openstack-block-storage/1.0/content'
-XML_NS_V2 = 'http://docs.openstack.org/api/openstack-block-storage/2.0/content'
-
 METADATA_TYPES = enum.Enum('METADATA_TYPES', 'user image')
 
 
@@ -76,6 +74,14 @@ def validate_key_names(key_names_list):
         if not VALID_KEY_NAME_REGEX.match(key_name):
             return False
     return True
+
+
+def validate_policy(context, action):
+    try:
+        cinder.policy.enforce_action(context, action)
+        return True
+    except exception.PolicyNotAuthorized:
+        return False
 
 
 def get_pagination_params(params, max_limit=None):
@@ -127,17 +133,8 @@ def _get_marker_param(params):
 
 def _get_offset_param(params):
     """Extract offset id from request's dictionary (defaults to 0) or fail."""
-    try:
-        offset = int(params.pop('offset', 0))
-    except ValueError:
-        msg = _('offset param must be an integer')
-        raise webob.exc.HTTPBadRequest(explanation=msg)
-
-    if offset < 0:
-        msg = _('offset param must be positive')
-        raise webob.exc.HTTPBadRequest(explanation=msg)
-
-    return offset
+    offset = params.pop('offset', 0)
+    return utils.validate_integer(offset, 'offset', 0, constants.DB_MAX_INT)
 
 
 def limited(items, request, max_limit=None):
@@ -368,75 +365,3 @@ class ViewBuilder(object):
         url_parts[2] = prefix_parts[2] + url_parts[2]
 
         return urllib.parse.urlunsplit(url_parts).rstrip('/')
-
-
-class MetadataDeserializer(wsgi.MetadataXMLDeserializer):
-    def deserialize(self, text):
-        dom = utils.safe_minidom_parse_string(text)
-        metadata_node = self.find_first_child_named(dom, "metadata")
-        metadata = self.extract_metadata(metadata_node)
-        return {'body': {'metadata': metadata}}
-
-
-class MetaItemDeserializer(wsgi.MetadataXMLDeserializer):
-    def deserialize(self, text):
-        dom = utils.safe_minidom_parse_string(text)
-        metadata_item = self.extract_metadata(dom)
-        return {'body': {'meta': metadata_item}}
-
-
-class MetadataXMLDeserializer(wsgi.XMLDeserializer):
-
-    def extract_metadata(self, metadata_node):
-        """Marshal the metadata attribute of a parsed request."""
-        if metadata_node is None:
-            return {}
-        metadata = {}
-        for meta_node in self.find_children_named(metadata_node, "meta"):
-            key = meta_node.getAttribute("key")
-            metadata[key] = self.extract_text(meta_node)
-        return metadata
-
-    def _extract_metadata_container(self, datastring):
-        dom = utils.safe_minidom_parse_string(datastring)
-        metadata_node = self.find_first_child_named(dom, "metadata")
-        metadata = self.extract_metadata(metadata_node)
-        return {'body': {'metadata': metadata}}
-
-    def create(self, datastring):
-        return self._extract_metadata_container(datastring)
-
-    def update_all(self, datastring):
-        return self._extract_metadata_container(datastring)
-
-    def update(self, datastring):
-        dom = utils.safe_minidom_parse_string(datastring)
-        metadata_item = self.extract_metadata(dom)
-        return {'body': {'meta': metadata_item}}
-
-
-metadata_nsmap = {None: xmlutil.XMLNS_V11}
-
-
-class MetaItemTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        sel = xmlutil.Selector('meta', xmlutil.get_items, 0)
-        root = xmlutil.TemplateElement('meta', selector=sel)
-        root.set('key', 0)
-        root.text = 1
-        return xmlutil.MasterTemplate(root, 1, nsmap=metadata_nsmap)
-
-
-class MetadataTemplateElement(xmlutil.TemplateElement):
-    def will_render(self, datum):
-        return True
-
-
-class MetadataTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = MetadataTemplateElement('metadata', selector='metadata')
-        elem = xmlutil.SubTemplateElement(root, 'meta',
-                                          selector=xmlutil.get_items)
-        elem.set('key', 0)
-        elem.text = 1
-        return xmlutil.MasterTemplate(root, 1, nsmap=metadata_nsmap)
