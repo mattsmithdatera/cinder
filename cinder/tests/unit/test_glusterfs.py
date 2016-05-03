@@ -25,6 +25,7 @@ import mock
 import os_brick
 from oslo_concurrency import processutils as putils
 from oslo_config import cfg
+from oslo_utils import imageutils
 from oslo_utils import units
 
 from cinder import compute
@@ -33,7 +34,6 @@ from cinder import db
 from cinder import exception
 from cinder.i18n import _
 from cinder.image import image_utils
-from cinder.openstack.common import imageutils
 from cinder import test
 from cinder import utils
 from cinder.volume import driver as base_driver
@@ -92,7 +92,7 @@ class GlusterFsDriverTestCase(test.TestCase):
             self.TEST_MNT_POINT_BASE
         self._configuration.nas_secure_file_permissions = 'false'
         self._configuration.nas_secure_file_operations = 'false'
-        self._configuration.nas_ip = None
+        self._configuration.nas_host = None
         self._configuration.nas_share_path = None
         self._configuration.nas_mount_options = None
 

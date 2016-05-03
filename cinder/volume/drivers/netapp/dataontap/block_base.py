@@ -554,45 +554,42 @@ class NetAppBlockStorageLibrary(object):
                 break
         return value
 
-    def _do_sub_clone_resize(self, path, new_size_bytes,
+    def _do_sub_clone_resize(self, lun_path, new_size_bytes,
                              qos_policy_group_name=None):
-        """Does sub LUN clone after verification.
+        """Resize a LUN beyond its original geometry using sub-LUN cloning.
 
-            Clones the block ranges and swaps
-            the LUNs also deletes older LUN
-            after a successful clone.
+        Clones the block ranges, swaps the LUNs, and deletes the source LUN.
         """
-        seg = path.split("/")
-        LOG.info(_LI("Resizing LUN %s to new size using clone operation."),
-                 seg[-1])
-        name = seg[-1]
+        seg = lun_path.split("/")
+        LOG.info(_LI("Resizing LUN %s using clone operation."), seg[-1])
+        lun_name = seg[-1]
         vol_name = seg[2]
-        lun = self._get_lun_from_table(name)
+        lun = self._get_lun_from_table(lun_name)
         metadata = lun.metadata
+
         compression = self._get_vol_option(vol_name, 'compression')
         if compression == "on":
             msg = _('%s cannot be resized using clone operation'
                     ' as it is hosted on compressed volume')
-            raise exception.VolumeBackendAPIException(data=msg % name)
-        else:
-            block_count = self._get_lun_block_count(path)
-            if block_count == 0:
-                msg = _('%s cannot be resized using clone operation'
-                        ' as it contains no blocks.')
-                raise exception.VolumeBackendAPIException(data=msg % name)
-            new_lun = 'new-%s' % name
-            self.zapi_client.create_lun(
-                vol_name, new_lun, new_size_bytes, metadata,
-                qos_policy_group_name=qos_policy_group_name)
-            try:
-                self._clone_lun(name, new_lun, block_count=block_count,
-                                qos_policy_group_name=qos_policy_group_name)
+            raise exception.VolumeBackendAPIException(data=msg % lun_name)
 
-                self._post_sub_clone_resize(path)
-            except Exception:
-                with excutils.save_and_reraise_exception():
-                    new_path = '/vol/%s/%s' % (vol_name, new_lun)
-                    self.zapi_client.destroy_lun(new_path)
+        block_count = self._get_lun_block_count(lun_path)
+        if block_count == 0:
+            msg = _('%s cannot be resized using clone operation'
+                    ' as it contains no blocks.')
+            raise exception.VolumeBackendAPIException(data=msg % lun_name)
+
+        new_lun_name = 'new-%s' % lun_name
+        self.zapi_client.create_lun(
+            vol_name, new_lun_name, new_size_bytes, metadata,
+            qos_policy_group_name=qos_policy_group_name)
+        try:
+            self._clone_lun(lun_name, new_lun_name, block_count=block_count)
+            self._post_sub_clone_resize(lun_path)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                new_lun_path = '/vol/%s/%s' % (vol_name, new_lun_name)
+                self.zapi_client.destroy_lun(new_lun_path)
 
     def _post_sub_clone_resize(self, path):
         """Try post sub clone resize in a transactional manner."""
@@ -845,6 +842,9 @@ class NetAppBlockStorageLibrary(object):
         The target_wwn can be a single entry or a list of wwns that
         correspond to the list of remote wwn(s) that will export the volume.
         Example return values:
+
+        .. code-block:: json
+
             {
                 'driver_volume_type': 'fibre_channel'
                 'data': {
@@ -875,6 +875,7 @@ class NetAppBlockStorageLibrary(object):
                     }
                 }
             }
+
         """
 
         initiators = [fczm_utils.get_formatted_wwn(wwpn)
@@ -1001,7 +1002,7 @@ class NetAppBlockStorageLibrary(object):
         """Driver entry point for deleting a consistency group.
 
         :return: Updated consistency group model and list of volume models
-        for the volumes that were deleted.
+                 for the volumes that were deleted.
         """
         model_update = {'status': 'deleted'}
         volumes_model_update = []
@@ -1013,7 +1014,7 @@ class NetAppBlockStorageLibrary(object):
             except Exception:
                 volumes_model_update.append(
                     {'id': volume['id'], 'status': 'error_deleting'})
-                LOG.exception(_LE("Volume %(vol) in the consistency group "
+                LOG.exception(_LE("Volume %(vol)s in the consistency group "
                                   "could not be deleted."), {'vol': volume})
         return model_update, volumes_model_update
 
@@ -1043,7 +1044,8 @@ class NetAppBlockStorageLibrary(object):
         backing the Cinder volumes in the Cinder CG.
 
         :return: An implicit update for cgsnapshot and snapshots models that
-        is interpreted by the manager to set their models to available.
+                 is interpreted by the manager to set their models to
+                 available.
         """
         flexvols = set()
         for snapshot in snapshots:
@@ -1087,7 +1089,7 @@ class NetAppBlockStorageLibrary(object):
         """Delete LUNs backing each snapshot in the cgsnapshot.
 
         :return: An implicit update for snapshots models that is interpreted
-        by the manager to set their models to deleted.
+                 by the manager to set their models to deleted.
         """
         for snapshot in snapshots:
             self._delete_lun(snapshot['name'])
@@ -1101,7 +1103,7 @@ class NetAppBlockStorageLibrary(object):
         """Creates a CG from a either a cgsnapshot or group of cinder vols.
 
         :return: An implicit update for the volumes model that is
-        interpreted by the manager as a successful operation.
+                 interpreted by the manager as a successful operation.
         """
         LOG.debug("VOLUMES %s ", [dict(vol) for vol in volumes])
 

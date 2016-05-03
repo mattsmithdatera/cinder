@@ -26,6 +26,7 @@
 
     "volume_extension:types_manage": "rule:admin_api",
     "volume_extension:types_extra_specs": "rule:admin_api",
+    "volume_extension:access_types_qos_specs_id": "rule:admin_api",
     "volume_extension:access_types_extra_specs": "rule:admin_api",
     "volume_extension:volume_type_access": "rule:admin_or_owner",
     "volume_extension:volume_type_access:addProjectAccess": "rule:admin_api",
@@ -50,6 +51,8 @@
     "volume_extension:backup_admin_actions:force_delete": "rule:admin_api",
     "volume_extension:volume_admin_actions:migrate_volume": "rule:admin_api",
     "volume_extension:volume_admin_actions:migrate_volume_completion": "rule:admin_api",
+
+    "volume_extension:volume_actions:upload_public": "rule:admin_api",
 
     "volume_extension:volume_host_attribute": "rule:admin_api",
     "volume_extension:volume_tenant_attribute": "rule:admin_or_owner",
@@ -99,5 +102,8 @@
     "consistencygroup:get_cgsnapshot": "group:nobody",
     "consistencygroup:get_all_cgsnapshots": "group:nobody",
 
-    "scheduler_extension:scheduler_stats:get_pools" : "rule:admin_api"
+    "scheduler_extension:scheduler_stats:get_pools" : "rule:admin_api",
+    "message:delete": "rule:admin_or_owner",
+    "message:get": "rule:admin_or_owner",
+    "message:get_all": "rule:admin_or_owner"
 }

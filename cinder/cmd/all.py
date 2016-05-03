@@ -32,7 +32,9 @@ import sys
 
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_log import versionutils
 from oslo_reports import guru_meditation_report as gmr
+from oslo_reports import opts as gmr_opts
 
 from cinder import i18n
 i18n.enable_lazy()
@@ -41,7 +43,7 @@ i18n.enable_lazy()
 from cinder.cmd import volume as volume_cmd
 from cinder.common import config   # noqa
 from cinder.db import api as session
-from cinder.i18n import _LE
+from cinder.i18n import _LE, _
 from cinder import objects
 from cinder import rpc
 from cinder import service
@@ -55,14 +57,18 @@ CONF = cfg.CONF
 # TODO(e0ne): get a rid of code duplication in cinder.cmd module in Mitaka
 def main():
     objects.register_all()
+    gmr_opts.set_defaults(CONF)
     CONF(sys.argv[1:], project='cinder',
          version=version.version_string())
+    config.set_middleware_defaults()
     logging.setup(CONF, "cinder")
     LOG = logging.getLogger('cinder.all')
+    versionutils.report_deprecated_feature(LOG, _(
+        'cinder-all is deprecated in Newton and will be removed in Ocata.'))
 
     utils.monkey_patch()
 
-    gmr.TextGuruMeditation.setup_autorun(version)
+    gmr.TextGuruMeditation.setup_autorun(version, conf=CONF)
 
     rpc.init(CONF)
 

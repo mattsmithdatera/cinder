@@ -404,11 +404,12 @@ class RBDDriver(driver.TransferVD, driver.ExtendVD,
                     pool_stats = [pool for pool in outbuf['pools'] if
                                   pool['name'] ==
                                   self.configuration.rbd_pool][0]['stats']
-                    stats['free_capacity_gb'] = (
-                        pool_stats['max_avail'] // units.Gi)
-                    used_capacity_gb = pool_stats['bytes_used'] // units.Gi
-                    stats['total_capacity_gb'] = (stats['free_capacity_gb']
-                                                  + used_capacity_gb)
+                    stats['free_capacity_gb'] = round((float(
+                        pool_stats['max_avail']) / units.Gi), 2)
+                    used_capacity_gb = float(
+                        pool_stats['bytes_used']) / units.Gi
+                    stats['total_capacity_gb'] = round(
+                        (stats['free_capacity_gb'] + used_capacity_gb), 2)
         except self.rados.Error:
             # just log and return unknown capacities
             LOG.exception(_LE('error refreshing volume stats'))
@@ -556,6 +557,10 @@ class RBDDriver(driver.TransferVD, driver.ExtendVD,
         LOG.debug('cloning %(pool)s/%(img)s@%(snap)s to %(dst)s',
                   dict(pool=src_pool, img=src_image, snap=src_snap,
                        dst=volume.name))
+
+        chunk_size = self.configuration.rbd_store_chunk_size * units.Mi
+        order = int(math.log(chunk_size, 2))
+
         with RADOSClient(self, src_pool) as src_client:
             with RADOSClient(self) as dest_client:
                 self.RBDProxy().clone(src_client.ioctx,
@@ -563,7 +568,8 @@ class RBDDriver(driver.TransferVD, driver.ExtendVD,
                                       utils.convert_str(src_snap),
                                       dest_client.ioctx,
                                       utils.convert_str(volume.name),
-                                      features=src_client.features)
+                                      features=src_client.features,
+                                      order=order)
 
     def _resize(self, volume, **kwargs):
         size = kwargs.get('size', None)
@@ -702,7 +708,9 @@ class RBDDriver(driver.TransferVD, driver.ExtendVD,
             finally:
                 rbd_image.close()
 
-            @utils.retry(self.rbd.ImageBusy, retries=3)
+            @utils.retry(self.rbd.ImageBusy,
+                         self.configuration.rados_connection_interval,
+                         self.configuration.rados_connection_retries)
             def _try_remove_volume(client, volume_name):
                 self.RBDProxy().remove(client.ioctx, volume_name)
 
@@ -755,10 +763,13 @@ class RBDDriver(driver.TransferVD, driver.ExtendVD,
             try:
                 volume.unprotect_snap(snap_name)
             except self.rbd.InvalidArgument:
-                LOG.info(_LI("Unable to unprotect snapshot %s."), snap_name)
+                LOG.info(
+                    _LI("InvalidArgument: Unable to unprotect snapshot %s."),
+                    snap_name)
             except self.rbd.ImageNotFound:
-                LOG.info(_LI("Snapshot %s does not exist in backend."),
-                         snap_name)
+                LOG.info(
+                    _LI("ImageNotFound: Unable to unprotect snapshot %s."),
+                    snap_name)
             except self.rbd.ImageBusy:
                 children_list = self._get_children_info(volume, snap_name)
 
@@ -771,7 +782,11 @@ class RBDDriver(driver.TransferVD, driver.ExtendVD,
                                   'snap': snap_name})
 
                 raise exception.SnapshotIsBusy(snapshot_name=snap_name)
-            volume.remove_snap(snap_name)
+            try:
+                volume.remove_snap(snap_name)
+            except self.rbd.ImageNotFound:
+                LOG.info(_LI("Snapshot %s does not exist in backend."),
+                         snap_name)
 
     def retype(self, context, volume, new_type, diff, host):
         """Retypes a volume, allow Qos and extra_specs change."""

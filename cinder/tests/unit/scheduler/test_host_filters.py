@@ -24,7 +24,9 @@ from cinder import context
 from cinder import db
 from cinder import exception
 from cinder.scheduler import filters
+from cinder.scheduler.filters import extra_specs_ops
 from cinder import test
+from cinder.tests.unit import fake_constants as fake
 from cinder.tests.unit.scheduler import fakes
 from cinder.tests.unit import utils
 
@@ -34,7 +36,7 @@ class HostFiltersTestCase(test.TestCase):
 
     def setUp(self):
         super(HostFiltersTestCase, self).setUp()
-        self.context = context.RequestContext('fake', 'fake')
+        self.context = context.RequestContext(fake.USER_ID, fake.PROJECT_ID)
         # This has a side effect of testing 'get_filter_classes'
         # when specifying a method (in this case, our standard filters)
         filter_handler = filters.HostFilterHandler('cinder.scheduler.filters')
@@ -278,6 +280,28 @@ class CapacityFilterTestCase(HostFiltersTestCase):
                                     'free_capacity_gb': 100,
                                     'provisioned_capacity_gb': 400,
                                     'max_over_subscription_ratio': 0.8,
+                                    'reserved_percentage': 0,
+                                    'thin_provisioning_support': True,
+                                    'thick_provisioning_support': False,
+                                    'updated_at': None,
+                                    'service': service})
+        self.assertFalse(filt_cls.host_passes(host, filter_properties))
+
+    @mock.patch('cinder.utils.service_is_up')
+    def test_filter_over_subscription_equal_to_1(self, _mock_serv_is_up):
+        _mock_serv_is_up.return_value = True
+        filt_cls = self.class_map['CapacityFilter']()
+        filter_properties = {'size': 150,
+                             'capabilities:thin_provisioning_support':
+                                 '<is> True',
+                             'capabilities:thick_provisioning_support':
+                                 '<is> False'}
+        service = {'disabled': False}
+        host = fakes.FakeHostState('host1',
+                                   {'total_capacity_gb': 500,
+                                    'free_capacity_gb': 200,
+                                    'provisioned_capacity_gb': 400,
+                                    'max_over_subscription_ratio': 1.0,
                                     'reserved_percentage': 0,
                                     'thin_provisioning_support': True,
                                     'thick_provisioning_support': False,
@@ -1002,7 +1026,7 @@ class TestBogusFilter(object):
 class ExtraSpecsOpsTestCase(test.TestCase):
     def _do_extra_specs_ops_test(self, value, req, matches):
         assertion = self.assertTrue if matches else self.assertFalse
-        assertion(filters.extra_specs_ops.match(value, req))
+        assertion(extra_specs_ops.match(value, req))
 
     def test_extra_specs_matches_simple(self):
         self._do_extra_specs_ops_test(

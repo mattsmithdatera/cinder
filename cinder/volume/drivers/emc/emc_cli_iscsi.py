@@ -26,6 +26,9 @@ class EMCCLIISCSIDriver(driver.ISCSIDriver):
     """EMC ISCSI Drivers for VNX using CLI.
 
     Version history:
+
+    .. code-block:: none
+
         1.0.0 - Initial driver
         2.0.0 - Thick/thin provisioning, robust enhancement
         3.0.0 - Array-based Backend Support, FC Basic Support,
@@ -58,14 +61,15 @@ class EMCCLIISCSIDriver(driver.ISCSIDriver):
                 Support efficient non-disruptive backup
         7.0.0 - Clone consistency group support
                 Replication v2 support(managed)
+                Configurable migration rate support
     """
 
     def __init__(self, *args, **kwargs):
-
         super(EMCCLIISCSIDriver, self).__init__(*args, **kwargs)
         self.cli = emc_vnx_cli.getEMCVnxCli(
             'iSCSI',
-            configuration=self.configuration)
+            configuration=self.configuration,
+            active_backend_id=kwargs.get('active_backend_id'))
         self.VERSION = self.cli.VERSION
 
     def check_for_setup_error(self):
@@ -190,13 +194,18 @@ class EMCCLIISCSIDriver(driver.ISCSIDriver):
         volume['name'] which is how drivers traditionally map between a
         cinder volume and the associated backend storage object.
 
-        manage_existing_ref:{
-            'source-id':<lun id in VNX>
-        }
-        or
-        manage_existing_ref:{
-            'source-name':<lun name in VNX>
-        }
+        .. code-block:: none
+
+            manage_existing_ref:{
+                'source-id':<lun id in VNX>
+            }
+
+            or
+
+            manage_existing_ref:{
+                'source-name':<lun name in VNX>
+            }
+
         """
         return self.cli.manage_existing(volume, existing_ref)
 
@@ -280,18 +289,6 @@ class EMCCLIISCSIDriver(driver.ISCSIDriver):
     def backup_use_temp_snapshot(self):
         return True
 
-    def replication_enable(self, context, volume):
-        """Enables replication on a replication capable volume."""
-        return self.cli.replication_enable(context, volume)
-
-    def replication_disable(self, context, volume):
-        """Disables replication on a replication-enabled volume."""
-        return self.cli.replication_disable(context, volume)
-
-    def replication_failover(self, context, volume, secondary):
+    def failover_host(self, context, volumes, secondary_id=None):
         """Failovers volume from primary device to secondary."""
-        return self.cli.replication_failover(context, volume, secondary)
-
-    def list_replication_targets(self, context, volume):
-        """Returns volume replication info."""
-        return self.cli.list_replication_targets(context, volume)
+        return self.cli.failover_host(context, volumes, secondary_id)

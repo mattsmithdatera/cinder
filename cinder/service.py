@@ -34,6 +34,7 @@ from oslo_utils import importutils
 osprofiler_notifier = importutils.try_import('osprofiler.notifier')
 profiler = importutils.try_import('osprofiler.profiler')
 osprofiler_web = importutils.try_import('osprofiler.web')
+profiler_opts = importutils.try_import('osprofiler.opts')
 
 from cinder import context
 from cinder import exception
@@ -69,28 +70,22 @@ service_opts = [
                help='Number of workers for OpenStack Volume API service. '
                     'The default is equal to the number of CPUs available.'), ]
 
-profiler_opts = [
-    cfg.BoolOpt("profiler_enabled", default=False,
-                help=_('If False fully disable profiling feature.')),
-    cfg.BoolOpt("trace_sqlalchemy", default=False,
-                help=_("If False doesn't trace SQL requests.")),
-    cfg.StrOpt("hmac_keys", default="SECRET_KEY",
-               help=_("Secret key to use to sign tracing messages."))
-]
 
 CONF = cfg.CONF
 CONF.register_opts(service_opts)
-CONF.register_opts(profiler_opts, group="profiler")
+if profiler_opts:
+    profiler_opts.set_defaults(CONF)
 
 
 def setup_profiler(binary, host):
     if (osprofiler_notifier is None or
             profiler is None or
-            osprofiler_web is None):
+            osprofiler_web is None or
+            profiler_opts is None):
         LOG.debug('osprofiler is not present')
         return
 
-    if CONF.profiler.profiler_enabled:
+    if CONF.profiler.enabled:
         _notifier = osprofiler_notifier.create(
             "Messaging", messaging, context.get_admin_context().to_dict(),
             rpc.TRANSPORT, "cinder", binary, host)
@@ -105,7 +100,7 @@ def setup_profiler(binary, host):
                 "trigger profiler, only admin user can retrieve trace "
                 "information.\n"
                 "To disable OSprofiler set in cinder.conf:\n"
-                "[profiler]\nprofiler_enabled=false"))
+                "[profiler]\nenabled=false"))
     else:
         osprofiler_web.disable()
 
@@ -131,8 +126,24 @@ class Service(service.Service):
         self.topic = topic
         self.manager_class_name = manager
         manager_class = importutils.import_class(self.manager_class_name)
-        if CONF.profiler.profiler_enabled:
+        if CONF.profiler.enabled:
             manager_class = profiler.trace_cls("rpc")(manager_class)
+
+        # NOTE(geguileo): We need to create the Service DB entry before we
+        # create the manager, otherwise capped versions for serializer and rpc
+        # client would used existing DB entries not including us, which could
+        # result in us using None (if it's the first time the service is run)
+        # or an old version (if this is a normal upgrade of a single service).
+        ctxt = context.get_admin_context()
+        try:
+            service_ref = objects.Service.get_by_args(ctxt, host, binary)
+            service_ref.rpc_current_version = manager_class.RPC_API_VERSION
+            obj_version = objects_base.OBJ_VERSIONS.get_current()
+            service_ref.object_current_version = obj_version
+            service_ref.save()
+            self.service_id = service_ref.id
+        except exception.NotFound:
+            self._create_service_ref(ctxt, manager_class.RPC_API_VERSION)
 
         self.manager = manager_class(host=self.host,
                                      service_name=service_name,
@@ -153,17 +164,6 @@ class Service(service.Service):
                  {'topic': self.topic, 'version_string': version_string})
         self.model_disconnected = False
         self.manager.init_host()
-        ctxt = context.get_admin_context()
-        try:
-            service_ref = objects.Service.get_by_args(
-                ctxt, self.host, self.binary)
-            service_ref.rpc_current_version = self.manager.RPC_API_VERSION
-            obj_version = objects_base.OBJ_VERSIONS.get_current()
-            service_ref.object_current_version = obj_version
-            service_ref.save()
-            self.service_id = service_ref.id
-        except exception.NotFound:
-            self._create_service_ref(ctxt)
 
         LOG.debug("Creating RPC server for service %s", self.topic)
 
@@ -212,7 +212,7 @@ class Service(service.Service):
                      'new_down_time': new_down_time})
                 CONF.set_override('service_down_time', new_down_time)
 
-    def _create_service_ref(self, context):
+    def _create_service_ref(self, context, rpc_version=None):
         zone = CONF.storage_availability_zone
         kwargs = {
             'host': self.host,
@@ -220,7 +220,7 @@ class Service(service.Service):
             'topic': self.topic,
             'report_count': 0,
             'availability_zone': zone,
-            'rpc_current_version': self.manager.RPC_API_VERSION,
+            'rpc_current_version': rpc_version or self.manager.RPC_API_VERSION,
             'object_current_version': objects_base.OBJ_VERSIONS.get_current(),
         }
         service_ref = objects.Service(context=context, **kwargs)

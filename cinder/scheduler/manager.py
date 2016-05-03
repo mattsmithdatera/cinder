@@ -56,7 +56,7 @@ LOG = logging.getLogger(__name__)
 class SchedulerManager(manager.Manager):
     """Chooses a host to create volumes."""
 
-    RPC_API_VERSION = '1.11'
+    RPC_API_VERSION = '2.0'
 
     target = messaging.Target(version=RPC_API_VERSION)
 
@@ -125,7 +125,7 @@ class SchedulerManager(manager.Manager):
 
         self._wait_for_scheduler()
 
-        # FIXME(thangp): Remove this in v2.0 of RPC API.
+        # FIXME(dulek): Remove this in v3.0 of RPC API.
         if volume is None:
             # For older clients, mimic the old behavior and look up the
             # volume by its volume_id.
@@ -157,7 +157,7 @@ class SchedulerManager(manager.Manager):
 
         self._wait_for_scheduler()
 
-        # FIXME(thangp): Remove this in v2.0 of RPC API.
+        # FIXME(dulek): Remove this in v3.0 of RPC API.
         if volume is None:
             # For older clients, mimic the old behavior and look up the
             # volume by its volume_id.
@@ -203,7 +203,7 @@ class SchedulerManager(manager.Manager):
 
         self._wait_for_scheduler()
 
-        # FIXME(thangp): Remove this in v2.0 of RPC API.
+        # FIXME(dulek): Remove this in v3.0 of RPC API.
         if volume is None:
             # For older clients, mimic the old behavior and look up the
             # volume by its volume_id.

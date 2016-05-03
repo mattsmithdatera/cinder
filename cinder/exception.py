@@ -286,6 +286,10 @@ class VolumeNotFound(NotFound):
     message = _("Volume %(volume_id)s could not be found.")
 
 
+class MessageNotFound(NotFound):
+    message = _("Message %(message_id)s could not be found.")
+
+
 class VolumeAttachmentNotFound(NotFound):
     message = _("Volume attachment could not be found with "
                 "filter: %(filter)s .")
@@ -368,7 +372,14 @@ class ImageNotFound(NotFound):
 
 
 class ServiceNotFound(NotFound):
-    message = _("Service %(service_id)s could not be found.")
+
+    def __init__(self, message=None, **kwargs):
+        if kwargs.get('host', None):
+            self.message = _("Service %(service_id)s could not be "
+                             "found on host %(host)s.")
+        else:
+            self.message = _("Service %(service_id)s could not be found.")
+        super(ServiceNotFound, self).__init__(None, **kwargs)
 
 
 class ServiceTooOld(Invalid):
@@ -385,10 +396,6 @@ class SchedulerHostFilterNotFound(NotFound):
 
 class SchedulerHostWeigherNotFound(NotFound):
     message = _("Scheduler Host Weigher %(weigher_name)s could not be found.")
-
-
-class HostBinaryNotFound(NotFound):
-    message = _("Could not find binary %(binary)s on host %(host)s.")
 
 
 class InvalidReservationExpiration(Invalid):
@@ -527,6 +534,10 @@ class SnapshotLimitExceeded(QuotaError):
 
 class BackupLimitExceeded(QuotaError):
     message = _("Maximum number of backups allowed (%(allowed)d) exceeded")
+
+
+class ImageLimitExceeded(QuotaError):
+    message = _("Image quota exceeded")
 
 
 class DuplicateSfVolumeNames(Duplicate):
@@ -902,6 +913,11 @@ class NetAppDriverException(VolumeDriverException):
 
 class EMCVnxCLICmdError(VolumeBackendAPIException):
     message = _("EMC VNX Cinder Driver CLI exception: %(cmd)s "
+                "(Return Code: %(rc)s) (Output: %(out)s).")
+
+
+class EMCSPUnavailableException(EMCVnxCLICmdError):
+    message = _("EMC VNX Cinder Driver SPUnavailableException: %(cmd)s "
                 "(Return Code: %(rc)s) (Output: %(out)s).")
 
 

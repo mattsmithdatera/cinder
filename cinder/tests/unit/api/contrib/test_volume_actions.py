@@ -22,6 +22,7 @@ from oslo_serialization import jsonutils
 import webob
 
 from cinder.api.contrib import volume_actions
+from cinder.api.openstack import api_version_request as api_version
 from cinder import context
 from cinder import exception
 from cinder.image import glance
@@ -44,7 +45,8 @@ class VolumeActionsTest(test.TestCase):
 
     def setUp(self):
         super(VolumeActionsTest, self).setUp()
-        self.context = context.RequestContext('fake', 'fake', is_admin=False)
+        self.context = context.RequestContext(fake.USER_ID, fake.PROJECT_ID,
+                                              is_admin=False)
         self.UUID = uuid.uuid4()
         self.controller = volume_actions.VolumeActionsController()
         self.api_patchers = {}
@@ -55,9 +57,10 @@ class VolumeActionsTest(test.TestCase):
             self.addCleanup(self.api_patchers[_meth].stop)
             self.api_patchers[_meth].return_value = True
 
-        db_vol = {'id': 'fake', 'host': 'fake', 'status': 'available',
+        db_vol = {'id': fake.VOLUME_ID, 'host': 'fake', 'status': 'available',
                   'size': 1, 'migration_status': None,
-                  'volume_type_id': 'fake', 'project_id': 'project_id'}
+                  'volume_type_id': fake.VOLUME_TYPE_ID,
+                  'project_id': fake.PROJECT_ID}
         vol = fake_volume.fake_volume_obj(self.context, **db_vol)
         self.get_patcher = mock.patch('cinder.volume.api.API.get')
         self.mock_volume_get = self.get_patcher.start()
@@ -75,10 +78,10 @@ class VolumeActionsTest(test.TestCase):
         self.flags(rpc_backend='cinder.openstack.common.rpc.impl_fake')
 
     def test_simple_api_actions(self):
-        app = fakes.wsgi_app()
+        app = fakes.wsgi_app(fake_auth_context=self.context)
         for _action in self._actions:
-            req = webob.Request.blank('/v2/fake/volumes/%s/action' %
-                                      self.UUID)
+            req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, self.UUID))
             req.method = 'POST'
             req.body = jsonutils.dump_as_bytes({_action: None})
             req.content_type = 'application/json'
@@ -90,12 +93,14 @@ class VolumeActionsTest(test.TestCase):
                                'initialize_connection') as init_conn:
             init_conn.return_value = {}
             body = {'os-initialize_connection': {'connector': 'fake'}}
-            req = webob.Request.blank('/v2/fake/volumes/1/action')
+            req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, fake.VOLUME_ID))
             req.method = "POST"
             req.body = jsonutils.dump_as_bytes(body)
             req.headers["content-type"] = "application/json"
 
-            res = req.get_response(fakes.wsgi_app())
+            res = req.get_response(fakes.wsgi_app(
+                fake_auth_context=self.context))
             self.assertEqual(200, res.status_int)
 
     def test_initialize_connection_without_connector(self):
@@ -103,12 +108,14 @@ class VolumeActionsTest(test.TestCase):
                                'initialize_connection') as init_conn:
             init_conn.return_value = {}
             body = {'os-initialize_connection': {}}
-            req = webob.Request.blank('/v2/fake/volumes/1/action')
+            req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, fake.VOLUME_ID))
             req.method = "POST"
             req.body = jsonutils.dump_as_bytes(body)
             req.headers["content-type"] = "application/json"
 
-            res = req.get_response(fakes.wsgi_app())
+            res = req.get_response(fakes.wsgi_app(
+                fake_auth_context=self.context))
             self.assertEqual(400, res.status_int)
 
     def test_initialize_connection_exception(self):
@@ -117,12 +124,14 @@ class VolumeActionsTest(test.TestCase):
             init_conn.side_effect = \
                 exception.VolumeBackendAPIException(data=None)
             body = {'os-initialize_connection': {'connector': 'fake'}}
-            req = webob.Request.blank('/v2/fake/volumes/1/action')
+            req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, fake.VOLUME_ID))
             req.method = "POST"
             req.body = jsonutils.dump_as_bytes(body)
             req.headers["content-type"] = "application/json"
 
-            res = req.get_response(fakes.wsgi_app())
+            res = req.get_response(fakes.wsgi_app(
+                fake_auth_context=self.context))
             self.assertEqual(500, res.status_int)
 
     def test_terminate_connection(self):
@@ -130,12 +139,14 @@ class VolumeActionsTest(test.TestCase):
                                'terminate_connection') as terminate_conn:
             terminate_conn.return_value = {}
             body = {'os-terminate_connection': {'connector': 'fake'}}
-            req = webob.Request.blank('/v2/fake/volumes/1/action')
+            req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, fake.VOLUME_ID))
             req.method = "POST"
             req.body = jsonutils.dump_as_bytes(body)
             req.headers["content-type"] = "application/json"
 
-            res = req.get_response(fakes.wsgi_app())
+            res = req.get_response(fakes.wsgi_app(
+                fake_auth_context=self.context))
             self.assertEqual(202, res.status_int)
 
     def test_terminate_connection_without_connector(self):
@@ -143,12 +154,14 @@ class VolumeActionsTest(test.TestCase):
                                'terminate_connection') as terminate_conn:
             terminate_conn.return_value = {}
             body = {'os-terminate_connection': {}}
-            req = webob.Request.blank('/v2/fake/volumes/1/action')
+            req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, fake.VOLUME_ID))
             req.method = "POST"
             req.body = jsonutils.dump_as_bytes(body)
             req.headers["content-type"] = "application/json"
 
-            res = req.get_response(fakes.wsgi_app())
+            res = req.get_response(fakes.wsgi_app(
+                fake_auth_context=self.context))
             self.assertEqual(400, res.status_int)
 
     def test_terminate_connection_with_exception(self):
@@ -157,46 +170,54 @@ class VolumeActionsTest(test.TestCase):
             terminate_conn.side_effect = \
                 exception.VolumeBackendAPIException(data=None)
             body = {'os-terminate_connection': {'connector': 'fake'}}
-            req = webob.Request.blank('/v2/fake/volumes/1/action')
+            req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, fake.VOLUME_ID))
             req.method = "POST"
             req.body = jsonutils.dump_as_bytes(body)
             req.headers["content-type"] = "application/json"
 
-            res = req.get_response(fakes.wsgi_app())
+            res = req.get_response(fakes.wsgi_app(
+                fake_auth_context=self.context))
             self.assertEqual(500, res.status_int)
 
     def test_attach_to_instance(self):
-        body = {'os-attach': {'instance_uuid': 'fake',
+        body = {'os-attach': {'instance_uuid': fake.INSTANCE_ID,
                               'mountpoint': '/dev/vdc',
                               'mode': 'rw'}}
-        req = webob.Request.blank('/v2/fake/volumes/1/action')
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, fake.VOLUME_ID))
         req.method = "POST"
         req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(
+            fake_auth_context=self.context))
         self.assertEqual(202, res.status_int)
 
-        body = {'os-attach': {'instance_uuid': 'fake',
+        body = {'os-attach': {'instance_uuid': fake.INSTANCE_ID,
                               'host_name': 'fake_host',
                               'mountpoint': '/dev/vdc'}}
-        req = webob.Request.blank('/v2/fake/volumes/1/action')
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, fake.VOLUME_ID))
         req.method = "POST"
         req.headers["content-type"] = "application/json"
         req.body = jsonutils.dump_as_bytes(body)
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(
+            fake_auth_context=self.context))
         self.assertEqual(202, res.status_int)
 
     def test_attach_to_host(self):
         # using 'read-write' mode attach volume by default
         body = {'os-attach': {'host_name': 'fake_host',
                               'mountpoint': '/dev/vdc'}}
-        req = webob.Request.blank('/v2/fake/volumes/1/action')
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, fake.VOLUME_ID))
         req.method = "POST"
         req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(
+            fake_auth_context=self.context))
         self.assertEqual(202, res.status_int)
 
     def test_volume_attach_to_instance_raises_remote_error(self):
@@ -204,12 +225,13 @@ class VolumeActionsTest(test.TestCase):
             messaging.RemoteError(exc_type='InvalidUUID')
         with mock.patch.object(volume_api.API, 'attach',
                                side_effect=volume_remote_error):
-            id = 1
+            id = fake.VOLUME_ID
             vol = {"instance_uuid": self.UUID,
                    "mountpoint": "/dev/vdc",
                    "mode": "rw"}
             body = {"os-attach": vol}
-            req = fakes.HTTPRequest.blank('/v2/tenant1/volumes/%s/action' % id)
+            req = fakes.HTTPRequest.blank('/v2/%s/volumes/%s/action' %
+                                          (fake.PROJECT_ID, id))
             self.assertRaises(webob.exc.HTTPBadRequest,
                               self.controller._attach,
                               req,
@@ -222,12 +244,13 @@ class VolumeActionsTest(test.TestCase):
             messaging.RemoteError(exc_type='DBError')
         with mock.patch.object(volume_api.API, 'attach',
                                side_effect=volume_remote_error):
-            id = 1
+            id = fake.VOLUME_ID
             vol = {"instance_uuid": self.UUID,
                    "mountpoint": "/dev/vdc",
                    "mode": "rw"}
             body = {"os-attach": vol}
-            req = fakes.HTTPRequest.blank('/v2/tenant1/volumes/%s/action' % id)
+            req = fakes.HTTPRequest.blank('/v2/%s/volumes/%s/action' %
+                                          (fake.PROJECT_ID, id))
             self.assertRaises(messaging.RemoteError,
                               self.controller._attach,
                               req,
@@ -235,13 +258,15 @@ class VolumeActionsTest(test.TestCase):
                               body)
 
     def test_detach(self):
-        body = {'os-detach': {'attachment_id': 'fakeuuid'}}
-        req = webob.Request.blank('/v2/fake/volumes/1/action')
+        body = {'os-detach': {'attachment_id': fake.ATTACHMENT_ID}}
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, fake.VOLUME_ID))
         req.method = "POST"
         req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(
+            fake_auth_context=self.context))
         self.assertEqual(202, res.status_int)
 
     def test_volume_detach_raises_remote_error(self):
@@ -249,10 +274,11 @@ class VolumeActionsTest(test.TestCase):
             messaging.RemoteError(exc_type='VolumeAttachmentNotFound')
         with mock.patch.object(volume_api.API, 'detach',
                                side_effect=volume_remote_error):
-            id = 1
+            id = fake.VOLUME_ID
             vol = {"attachment_id": self.UUID}
             body = {"os-detach": vol}
-            req = fakes.HTTPRequest.blank('/v2/tenant1/volumes/%s/action' % id)
+            req = fakes.HTTPRequest.blank('/v2/%s/volumes/%s/action' %
+                                          (fake.PROJECT_ID, id))
             self.assertRaises(webob.exc.HTTPBadRequest,
                               self.controller._detach,
                               req,
@@ -265,10 +291,11 @@ class VolumeActionsTest(test.TestCase):
             messaging.RemoteError(exc_type='DBError')
         with mock.patch.object(volume_api.API, 'detach',
                                side_effect=volume_remote_error):
-            id = 1
+            id = fake.VOLUME_ID
             vol = {"attachment_id": self.UUID}
             body = {"os-detach": vol}
-            req = fakes.HTTPRequest.blank('/v2/tenant1/volumes/%s/action' % id)
+            req = fakes.HTTPRequest.blank('/v2/%s/volumes/%s/action' %
+                                          (fake.PROJECT_ID, id))
             self.assertRaises(messaging.RemoteError,
                               self.controller._detach,
                               req,
@@ -278,31 +305,37 @@ class VolumeActionsTest(test.TestCase):
     def test_attach_with_invalid_arguments(self):
         # Invalid request to attach volume an invalid target
         body = {'os-attach': {'mountpoint': '/dev/vdc'}}
-        req = webob.Request.blank('/v2/fake/volumes/1/action')
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, fake.VOLUME_ID))
         req.method = "POST"
         req.headers["content-type"] = "application/json"
         req.body = jsonutils.dump_as_bytes(body)
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(
+            fake_auth_context=self.context))
         self.assertEqual(400, res.status_int)
 
         # Invalid request to attach volume with an invalid mode
         body = {'os-attach': {'instance_uuid': 'fake',
                               'mountpoint': '/dev/vdc',
                               'mode': 'rr'}}
-        req = webob.Request.blank('/v2/fake/volumes/1/action')
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, fake.VOLUME_ID))
         req.method = "POST"
         req.headers["content-type"] = "application/json"
         req.body = jsonutils.dump_as_bytes(body)
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(
+            fake_auth_context=self.context))
         self.assertEqual(400, res.status_int)
         body = {'os-attach': {'host_name': 'fake_host',
                               'mountpoint': '/dev/vdc',
                               'mode': 'ww'}}
-        req = webob.Request.blank('/v2/fake/volumes/1/action')
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, fake.VOLUME_ID))
         req.method = "POST"
         req.headers["content-type"] = "application/json"
         req.body = jsonutils.dump_as_bytes(body)
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(
+            fake_auth_context=self.context))
         self.assertEqual(400, res.status_int)
 
     def test_begin_detaching(self):
@@ -312,12 +345,14 @@ class VolumeActionsTest(test.TestCase):
                        fake_begin_detaching)
 
         body = {'os-begin_detaching': {'fake': 'fake'}}
-        req = webob.Request.blank('/v2/fake/volumes/1/action')
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, fake.VOLUME_ID))
         req.method = "POST"
         req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(
+            fake_auth_context=self.context))
         self.assertEqual(202, res.status_int)
 
     def test_roll_detaching(self):
@@ -327,12 +362,14 @@ class VolumeActionsTest(test.TestCase):
                        fake_roll_detaching)
 
         body = {'os-roll_detaching': {'fake': 'fake'}}
-        req = webob.Request.blank('/v2/fake/volumes/1/action')
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, fake.VOLUME_ID))
         req.method = "POST"
         req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(
+            fake_auth_context=self.context))
         self.assertEqual(202, res.status_int)
 
     def test_extend_volume(self):
@@ -342,12 +379,14 @@ class VolumeActionsTest(test.TestCase):
                        fake_extend_volume)
 
         body = {'os-extend': {'new_size': 5}}
-        req = webob.Request.blank('/v2/fake/volumes/1/action')
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, fake.VOLUME_ID))
         req.method = "POST"
         req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(
+            fake_auth_context=self.context))
         self.assertEqual(202, res.status_int)
 
     def test_extend_volume_invalid_status(self):
@@ -358,12 +397,13 @@ class VolumeActionsTest(test.TestCase):
                        fake_extend_volume)
 
         body = {'os-extend': {'new_size': 5}}
-        req = webob.Request.blank('/v2/fake/volumes/1/action')
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, fake.VOLUME_ID))
         req.method = "POST"
         req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(fake_auth_context=self.context))
         self.assertEqual(400, res.status_int)
 
     def test_update_readonly_flag(self):
@@ -376,11 +416,13 @@ class VolumeActionsTest(test.TestCase):
             body = {"os-update_readonly_flag": {"readonly": readonly}}
             if readonly is None:
                 body = {"os-update_readonly_flag": {}}
-            req = webob.Request.blank('/v2/fake/volumes/1/action')
+            req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, fake.VOLUME_ID))
             req.method = "POST"
             req.body = jsonutils.dump_as_bytes(body)
             req.headers["content-type"] = "application/json"
-            res = req.get_response(fakes.wsgi_app())
+            res = req.get_response(fakes.wsgi_app(
+                fake_auth_context=self.context))
             self.assertEqual(return_code, res.status_int)
 
         make_update_readonly_flag_test(self, True, 202)
@@ -399,11 +441,13 @@ class VolumeActionsTest(test.TestCase):
             body = {"os-set_bootable": {"bootable": bootable}}
             if bootable is None:
                 body = {"os-set_bootable": {}}
-            req = webob.Request.blank('/v2/fake/volumes/1/action')
+            req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, fake.VOLUME_ID))
             req.method = "POST"
             req.body = jsonutils.dump_as_bytes(body)
             req.headers["content-type"] = "application/json"
-            res = req.get_response(fakes.wsgi_app())
+            res = req.get_response(fakes.wsgi_app(
+                fake_auth_context=self.context))
             self.assertEqual(return_code, res.status_int)
 
         make_set_bootable_test(self, True, 200)
@@ -420,8 +464,12 @@ class VolumeActionsTest(test.TestCase):
 class VolumeRetypeActionsTest(VolumeActionsTest):
     def setUp(self):
         def get_vol_type(*args, **kwargs):
-            d1 = {'id': 'fake', 'qos_specs_id': 'fakeqid1', 'extra_specs': {}}
-            d2 = {'id': 'foo', 'qos_specs_id': 'fakeqid2', 'extra_specs': {}}
+            d1 = {'id': fake.VOLUME_TYPE_ID,
+                  'qos_specs_id': fake.QOS_SPEC_ID,
+                  'extra_specs': {}}
+            d2 = {'id': fake.VOLUME_TYPE2_ID,
+                  'qos_specs_id': fake.QOS_SPEC2_ID,
+                  'extra_specs': {}}
             return d1 if d1['id'] == args[1] else d2
 
         self.retype_patchers = {}
@@ -443,14 +491,18 @@ class VolumeRetypeActionsTest(VolumeActionsTest):
         self.retype_mocks['reserve'].return_value = None
 
         super(VolumeRetypeActionsTest, self).setUp()
+        self.context = context.RequestContext(
+            fake.USER_ID, fake.PROJECT_ID, auth_token=True)
 
-    def _retype_volume_exec(self, expected_status, new_type='foo'):
-        req = webob.Request.blank('/v2/fake/volumes/1/action')
+    def _retype_volume_exec(self, expected_status,
+                            new_type=fake.VOLUME_TYPE2_ID):
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, fake.VOLUME_ID))
         req.method = 'POST'
         req.headers['content-type'] = 'application/json'
         retype_body = {'new_type': new_type, 'migration_policy': 'never'}
         req.body = jsonutils.dump_as_bytes({'os-retype': retype_body})
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(fake_auth_context=self.context))
         self.assertEqual(expected_status, res.status_int)
 
     @mock.patch('cinder.volume.qos_specs.get_qos_specs')
@@ -458,28 +510,30 @@ class VolumeRetypeActionsTest(VolumeActionsTest):
         # Test that the retype API works for both available and in-use
         self._retype_volume_exec(202)
         self.mock_volume_get.return_value['status'] = 'in-use'
-        specs = {'id': 'fakeqid1', 'name': 'fake_name1',
+        specs = {'id': fake.QOS_SPEC_ID, 'name': 'fake_name1',
                  'consumer': 'back-end', 'specs': {'key1': 'value1'}}
         _mock_get_qspecs.return_value = specs
         self._retype_volume_exec(202)
 
     def test_retype_volume_no_body(self):
         # Request with no body should fail
-        req = webob.Request.blank('/v2/fake/volumes/1/action')
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, fake.VOLUME_ID))
         req.method = 'POST'
         req.headers['content-type'] = 'application/json'
         req.body = jsonutils.dump_as_bytes({'os-retype': None})
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(fake_auth_context=self.context))
         self.assertEqual(400, res.status_int)
 
     def test_retype_volume_bad_policy(self):
         # Request with invalid migration policy should fail
-        req = webob.Request.blank('/v2/fake/volumes/1/action')
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, fake.VOLUME_ID))
         req.method = 'POST'
         req.headers['content-type'] = 'application/json'
         retype_body = {'new_type': 'foo', 'migration_policy': 'invalid'}
         req.body = jsonutils.dump_as_bytes({'os-retype': retype_body})
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(fake_auth_context=self.context))
         self.assertEqual(400, res.status_int)
 
     def test_retype_volume_bad_status(self):
@@ -495,7 +549,7 @@ class VolumeRetypeActionsTest(VolumeActionsTest):
 
     def test_retype_same_type(self):
         # Should fail if new type and old type are the same
-        self._retype_volume_exec(400, new_type='fake')
+        self._retype_volume_exec(400, new_type=fake.VOLUME_TYPE_ID)
 
     def test_retype_over_quota(self):
         # Should fail if going over quota for new type
@@ -510,9 +564,9 @@ class VolumeRetypeActionsTest(VolumeActionsTest):
     def _retype_volume_diff_qos(self, vol_status, consumer, expected_status,
                                 _mock_get_qspecs):
         def fake_get_qos(ctxt, qos_id):
-            d1 = {'id': 'fakeqid1', 'name': 'fake_name1',
+            d1 = {'id': fake.QOS_SPEC_ID, 'name': 'fake_name1',
                   'consumer': consumer, 'specs': {'key1': 'value1'}}
-            d2 = {'id': 'fakeqid2', 'name': 'fake_name2',
+            d2 = {'id': fake.QOS_SPEC2_ID, 'name': 'fake_name2',
                   'consumer': consumer, 'specs': {'key1': 'value1'}}
             return d1 if d1['id'] == qos_id else d2
 
@@ -536,7 +590,7 @@ class VolumeRetypeActionsTest(VolumeActionsTest):
 
 def stub_volume_get(self, context, volume_id):
     volume = stubs.stub_volume(volume_id)
-    if volume_id == 5:
+    if volume_id == fake.VOLUME3_ID:
         volume['status'] = 'in-use'
     else:
         volume['status'] = 'available'
@@ -551,7 +605,7 @@ def stub_upload_volume_to_image_service(self, context, volume, metadata,
            "display_description": volume['display_description'],
            "size": volume['size'],
            "volume_type": volume['volume_type'],
-           "image_id": 1,
+           "image_id": fake.IMAGE_ID,
            "container_format": 'bare',
            "disk_format": 'raw',
            "image_name": 'image_name'}
@@ -564,7 +618,8 @@ class VolumeImageActionsTest(test.TestCase):
         self.controller = volume_actions.VolumeActionsController()
 
         self.stubs.Set(volume_api.API, 'get', stub_volume_get)
-        self.context = context.RequestContext('fake', 'fake', is_admin=False)
+        self.context = context.RequestContext(fake.USER_ID, fake.PROJECT_ID,
+                                              is_admin=False)
 
     def _get_os_volume_upload_image(self):
         vol = {
@@ -572,7 +627,6 @@ class VolumeImageActionsTest(test.TestCase):
             "disk_format": 'raw',
             "updated_at": datetime.datetime(1, 1, 1, 1, 1, 1),
             "image_name": 'image_name',
-            "is_public": False,
             "force": True}
         body = {"os-volume_upload_image": vol}
 
@@ -587,11 +641,30 @@ class VolumeImageActionsTest(test.TestCase):
             'created_at': datetime.datetime(1, 1, 1, 1, 1, 1),
             'disk_format': u'raw',
             'updated_at': datetime.datetime(1, 1, 1, 1, 1, 1),
+            'id': fake.IMAGE_ID,
+            'min_ram': 0,
+            'checksum': None,
+            'min_disk': 0,
+            'deleted_at': None,
+            'properties': {u'x_billing_code_license': u'246254365'},
+            'size': 0}
+        return ret
+
+    def fake_image_service_create_3_1(self, *args):
+        ret = {
+            'status': u'queued',
+            'name': u'image_name',
+            'deleted': False,
+            'container_format': u'bare',
+            'created_at': datetime.datetime(1, 1, 1, 1, 1, 1),
+            'disk_format': u'raw',
+            'updated_at': datetime.datetime(1, 1, 1, 1, 1, 1),
             'id': 1,
             'min_ram': 0,
             'checksum': None,
             'min_disk': 0,
-            'is_public': False,
+            'visibility': 'public',
+            'protected': True,
             'deleted_at': None,
             'properties': {u'x_billing_code_license': u'246254365'},
             'size': 0}
@@ -605,13 +678,14 @@ class VolumeImageActionsTest(test.TestCase):
                        "copy_volume_to_image",
                        stub_upload_volume_to_image_service)
 
-        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        id = fake.VOLUME_ID
         vol = {"container_format": 'bare',
                "disk_format": 'raw',
                "image_name": 'image_name',
                "force": True}
         body = {"os-volume_upload_image": vol}
-        req = fakes.HTTPRequest.blank('/v2/tenant1/volumes/%s/action' % id)
+        req = fakes.HTTPRequest.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, id))
         res_dict = self.controller._volume_upload_image(req, id, body)
         expected = {'os-volume_upload_image':
                     {'id': id,
@@ -619,8 +693,9 @@ class VolumeImageActionsTest(test.TestCase):
                      'status': 'uploading',
                      'display_description': 'displaydesc',
                      'size': 1,
-                     'volume_type': {'name': 'vol_type_name'},
-                     'image_id': 1,
+                     'volume_type': fake_volume.fake_db_volume_type(
+                         name='vol_type_name'),
+                     'image_id': fake.IMAGE_ID,
                      'container_format': 'bare',
                      'disk_format': 'raw',
                      'image_name': 'image_name'}}
@@ -632,13 +707,14 @@ class VolumeImageActionsTest(test.TestCase):
 
         self.stubs.Set(volume_api.API, 'get', stub_volume_get_raise_exc)
 
-        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        id = fake.WILL_NOT_BE_FOUND_ID
         vol = {"container_format": 'bare',
                "disk_format": 'raw',
                "image_name": 'image_name',
                "force": True}
         body = {"os-volume_upload_image": vol}
-        req = fakes.HTTPRequest.blank('/v2/tenant1/volumes/%s/action' % id)
+        req = fakes.HTTPRequest.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, id))
         self.assertRaises(webob.exc.HTTPNotFound,
                           self.controller._volume_upload_image,
                           req,
@@ -653,13 +729,14 @@ class VolumeImageActionsTest(test.TestCase):
                        "copy_volume_to_image",
                        stub_upload_volume_to_image_service_raise)
 
-        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        id = fake.VOLUME2_ID
         vol = {"container_format": 'bare',
                "disk_format": 'raw',
                "image_name": 'image_name',
                "force": True}
         body = {"os-volume_upload_image": vol}
-        req = fakes.HTTPRequest.blank('/v2/tenant1/volumes/%s/action' % id)
+        req = fakes.HTTPRequest.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, fake.VOLUME_ID))
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller._volume_upload_image,
                           req,
@@ -674,13 +751,14 @@ class VolumeImageActionsTest(test.TestCase):
                        "copy_volume_to_image",
                        stub_upload_volume_to_image_service_raise)
 
-        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        id = fake.VOLUME2_ID
         vol = {"container_format": 'bare',
                "disk_format": 'raw',
                "image_name": 'image_name',
                "force": True}
         body = {"os-volume_upload_image": vol}
-        req = fakes.HTTPRequest.blank('/v2/tenant1/volumes/%s/action' % id)
+        req = fakes.HTTPRequest.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, fake.VOLUME_ID))
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller._volume_upload_image,
                           req,
@@ -695,13 +773,14 @@ class VolumeImageActionsTest(test.TestCase):
                        "copy_volume_to_image",
                        stub_upload_volume_to_image_service_raise)
 
-        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        id = fake.VOLUME2_ID
         vol = {"container_format": 'bare',
                "disk_format": 'raw',
                "image_name": 'image_name',
                "force": True}
         body = {"os-volume_upload_image": vol}
-        req = fakes.HTTPRequest.blank('/v2/tenant1/volumes/%s/action' % id)
+        req = fakes.HTTPRequest.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, id))
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller._volume_upload_image,
                           req,
@@ -709,33 +788,36 @@ class VolumeImageActionsTest(test.TestCase):
                           body)
 
     def test_volume_upload_image_typeerror(self):
-        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        id = fake.VOLUME2_ID
         body = {"os-volume_upload_image_fake": "fake"}
-        req = webob.Request.blank('/v2/tenant1/volumes/%s/action' % id)
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, id))
         req.method = 'POST'
         req.headers['Content-Type'] = 'application/json'
         req.body = jsonutils.dump_as_bytes(body)
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(fake_auth_context=self.context))
         self.assertEqual(400, res.status_int)
 
     def test_volume_upload_image_without_type(self):
-        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        id = fake.VOLUME2_ID
         vol = {"container_format": 'bare',
                "disk_format": 'raw',
                "image_name": None,
                "force": True}
         body = {"": vol}
-        req = webob.Request.blank('/v2/tenant1/volumes/%s/action' % id)
+        req = webob.Request.blank('/v2/%s/volumes/%s/action' %
+                                  (fake.PROJECT_ID, id))
         req.method = 'POST'
         req.headers['Content-Type'] = 'application/json'
         req.body = jsonutils.dump_as_bytes(body)
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(fakes.wsgi_app(fake_auth_context=self.context))
         self.assertEqual(400, res.status_int)
 
     def test_extend_volume_valueerror(self):
-        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        id = fake.VOLUME2_ID
         body = {'os-extend': {'new_size': 'fake'}}
-        req = fakes.HTTPRequest.blank('/v2/tenant1/volumes/%s/action' % id)
+        req = fakes.HTTPRequest.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, id))
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller._extend,
                           req,
@@ -743,13 +825,14 @@ class VolumeImageActionsTest(test.TestCase):
                           body)
 
     def test_copy_volume_to_image_notimagename(self):
-        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        id = fake.VOLUME2_ID
         vol = {"container_format": 'bare',
                "disk_format": 'raw',
                "image_name": None,
                "force": True}
         body = {"os-volume_upload_image": vol}
-        req = fakes.HTTPRequest.blank('/v2/tenant1/volumes/%s/action' % id)
+        req = fakes.HTTPRequest.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, id))
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller._volume_upload_image,
                           req,
@@ -758,11 +841,11 @@ class VolumeImageActionsTest(test.TestCase):
 
     def test_copy_volume_to_image_with_protected_prop(self):
         """Test create image from volume with protected properties."""
-        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        id = fake.VOLUME2_ID
 
         def fake_get_volume_image_metadata(*args):
             meta_dict = {
-                "volume_id": id,
+                "volume_id": fake.VOLUME2_ID,
                 "key": "x_billing_code_license",
                 "value": "246254365"}
             return meta_dict
@@ -789,7 +872,8 @@ class VolumeImageActionsTest(test.TestCase):
                             self.fake_rpc_copy_volume_to_image
 
                         req = fakes.HTTPRequest.blank(
-                            '/v2/tenant1/volumes/%s/action' % id)
+                            '/v2/%s/volumes/%s/action' % (
+                                fake.PROJECT_ID, id))
                         body = self._get_os_volume_upload_image()
                         res_dict = self.controller._volume_upload_image(req,
                                                                         id,
@@ -803,8 +887,9 @@ class VolumeImageActionsTest(test.TestCase):
                                 'status': 'uploading',
                                 'display_description': 'displaydesc',
                                 'size': 1,
-                                'volume_type': {'name': 'vol_type_name'},
-                                'image_id': 1,
+                                'volume_type': fake_volume.fake_db_volume_type(
+                                    name='vol_type_name'),
+                                'image_id': fake.IMAGE_ID,
                                 'container_format': 'bare',
                                 'disk_format': 'raw',
                                 'image_name': 'image_name'
@@ -813,13 +898,26 @@ class VolumeImageActionsTest(test.TestCase):
 
                         self.assertDictMatch(expected_res, res_dict)
 
+    def test_copy_volume_to_image_public_not_authorized(self):
+        """Test unauthorized create public image from volume."""
+        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        req = fakes.HTTPRequest.blank('/v3/tenant1/volumes/%s/action' % id)
+        req.environ['cinder.context'].is_admin = False
+        req.headers = {'OpenStack-API-Version': 'volume 3.1'}
+        req.api_version_request = api_version.APIVersionRequest('3.1')
+        body = self._get_os_volume_upload_image()
+        body['os-volume_upload_image']['visibility'] = 'public'
+        self.assertRaises(exception.PolicyNotAuthorized,
+                          self.controller._volume_upload_image,
+                          req, id, body)
+
     def test_copy_volume_to_image_without_glance_metadata(self):
         """Test create image from volume if volume is created without image.
 
         In this case volume glance metadata will not be available for this
         volume.
         """
-        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        id = fake.VOLUME_ID
 
         def fake_get_volume_image_metadata_raise(*args):
             raise exception.GlanceMetadataNotFound(id=id)
@@ -846,7 +944,7 @@ class VolumeImageActionsTest(test.TestCase):
                             self.fake_rpc_copy_volume_to_image
 
                         req = fakes.HTTPRequest.blank(
-                            '/v2/tenant1/volumes/%s/action' % id)
+                            '/v2/%s/volumes/%s/action' % (fake.PROJECT_ID, id))
                         body = self._get_os_volume_upload_image()
                         res_dict = self.controller._volume_upload_image(req,
                                                                         id,
@@ -860,8 +958,9 @@ class VolumeImageActionsTest(test.TestCase):
                                 'status': 'uploading',
                                 'display_description': 'displaydesc',
                                 'size': 1,
-                                'volume_type': {'name': 'vol_type_name'},
-                                'image_id': 1,
+                                'volume_type': fake_volume.fake_db_volume_type(
+                                    name='vol_type_name'),
+                                'image_id': fake.IMAGE_ID,
                                 'container_format': 'bare',
                                 'disk_format': 'raw',
                                 'image_name': 'image_name'
@@ -872,7 +971,7 @@ class VolumeImageActionsTest(test.TestCase):
 
     def test_copy_volume_to_image_without_protected_prop(self):
         """Test protected property is not defined with the root image."""
-        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        id = fake.VOLUME_ID
 
         def fake_get_volume_image_metadata(*args):
             return []
@@ -899,8 +998,8 @@ class VolumeImageActionsTest(test.TestCase):
                             self.fake_rpc_copy_volume_to_image
 
                         req = fakes.HTTPRequest.blank(
-                            '/v2/tenant1/volumes/%s/action' % id)
-
+                            '/v2/%s/volumes/%s/action' % (
+                                fake.PROJECT_ID, id))
                         body = self._get_os_volume_upload_image()
                         res_dict = self.controller._volume_upload_image(req,
                                                                         id,
@@ -914,8 +1013,9 @@ class VolumeImageActionsTest(test.TestCase):
                                 'status': 'uploading',
                                 'display_description': 'displaydesc',
                                 'size': 1,
-                                'volume_type': {'name': 'vol_type_name'},
-                                'image_id': 1,
+                                'volume_type': fake_volume.fake_db_volume_type(
+                                    name='vol_type_name'),
+                                'image_id': fake.IMAGE_ID,
                                 'container_format': 'bare',
                                 'disk_format': 'raw',
                                 'image_name': 'image_name'
@@ -926,7 +1026,7 @@ class VolumeImageActionsTest(test.TestCase):
 
     def test_copy_volume_to_image_without_core_prop(self):
         """Test glance_core_properties defined in cinder.conf is empty."""
-        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        id = fake.VOLUME_ID
 
         # Need to mock create, update, copy_volume_to_image
         with mock.patch.object(glance.GlanceImageService, "create") \
@@ -946,7 +1046,7 @@ class VolumeImageActionsTest(test.TestCase):
                     self.override_config('glance_core_properties', [])
 
                     req = fakes.HTTPRequest.blank(
-                        '/v2/tenant1/volumes/%s/action' % id)
+                        '/v2/%s/volumes/%s/action' % (fake.PROJECT_ID, id))
 
                     body = self._get_os_volume_upload_image()
                     res_dict = self.controller._volume_upload_image(req,
@@ -961,8 +1061,9 @@ class VolumeImageActionsTest(test.TestCase):
                             'status': 'uploading',
                             'display_description': 'displaydesc',
                             'size': 1,
-                            'volume_type': {'name': 'vol_type_name'},
-                            'image_id': 1,
+                            'volume_type': fake_volume.fake_db_volume_type(
+                                name='vol_type_name'),
+                            'image_id': fake.IMAGE_ID,
                             'container_format': 'bare',
                             'disk_format': 'raw',
                             'image_name': 'image_name'
@@ -995,21 +1096,78 @@ class VolumeImageActionsTest(test.TestCase):
         mock_copy_volume_to_image.side_effect = (
             self.fake_rpc_copy_volume_to_image)
 
-        req = fakes.HTTPRequest.blank('/v2/tenant1/volumes/%s/action' % id)
+        req = fakes.HTTPRequest.blank('/v2/%s/volumes/%s/action' %
+                                      (fake.PROJECT_ID, id))
         body = self._get_os_volume_upload_image()
         res_dict = self.controller._volume_upload_image(req, id, body)
         expected_res = {
             'os-volume_upload_image': {
-                'id': fake.volume_id,
+                'id': fake.VOLUME_ID,
                 'updated_at': None,
                 'status': 'uploading',
                 'display_description': None,
                 'size': 1,
                 'volume_type': None,
-                'image_id': 1,
+                'image_id': fake.IMAGE_ID,
                 'container_format': u'bare',
                 'disk_format': u'raw',
                 'image_name': u'image_name'
+            }
+        }
+
+        self.assertDictMatch(expected_res, res_dict)
+
+    @mock.patch.object(volume_api.API, "get_volume_image_metadata")
+    @mock.patch.object(glance.GlanceImageService, "create")
+    @mock.patch.object(volume_api.API, "update")
+    @mock.patch.object(volume_rpcapi.VolumeAPI, "copy_volume_to_image")
+    def test_copy_volume_to_image_version_3_1(
+            self,
+            mock_copy_volume_to_image,
+            mock_update,
+            mock_create,
+            mock_get_volume_image_metadata):
+        """Test create image from volume with protected properties."""
+        id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+
+        mock_get_volume_image_metadata.return_value = {
+            "volume_id": id,
+            "key": "x_billing_code_license",
+            "value": "246254365"}
+        mock_create.side_effect = self.fake_image_service_create_3_1
+        mock_update.side_effect = stubs.stub_volume_update
+        mock_copy_volume_to_image.side_effect = \
+            self.fake_rpc_copy_volume_to_image
+
+        self.override_config('glance_api_version', 2)
+
+        req = fakes.HTTPRequest.blank('/v3/tenant1/volumes/%s/action' % id)
+        req.environ['cinder.context'].is_admin = True
+        req.headers = {'OpenStack-API-Version': 'volume 3.1'}
+        req.api_version_request = api_version.APIVersionRequest('3.1')
+        body = self._get_os_volume_upload_image()
+        body['os-volume_upload_image']['visibility'] = 'public'
+        body['os-volume_upload_image']['protected'] = True
+        res_dict = self.controller._volume_upload_image(req,
+                                                        id,
+                                                        body)
+        expected_res = {
+            'os-volume_upload_image': {
+                'id': id,
+                'updated_at': datetime.datetime(
+                    1900, 1, 1, 1, 1, 1,
+                    tzinfo=iso8601.iso8601.Utc()),
+                'status': 'uploading',
+                'display_description': 'displaydesc',
+                'size': 1,
+                'visibility': 'public',
+                'protected': True,
+                'volume_type': fake_volume.fake_db_volume_type(
+                    name='vol_type_name'),
+                'image_id': 1,
+                'container_format': 'bare',
+                'disk_format': 'raw',
+                'image_name': 'image_name'
             }
         }
 

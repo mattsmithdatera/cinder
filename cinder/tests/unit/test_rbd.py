@@ -30,6 +30,7 @@ import cinder.image.glance
 from cinder.image import image_utils
 from cinder import objects
 from cinder import test
+from cinder.tests.unit import fake_constants as fake
 from cinder.tests.unit import fake_snapshot
 from cinder.tests.unit import fake_volume
 from cinder.tests.unit import test_volume
@@ -144,6 +145,8 @@ class RBDTestCase(test.TestCase):
         self.cfg.rbd_user = None
         self.cfg.volume_dd_blocksize = '1M'
         self.cfg.rbd_store_chunk_size = 4
+        self.cfg.rados_connection_retries = 3
+        self.cfg.rados_connection_interval = 5
 
         mock_exec = mock.Mock()
         mock_exec.return_value = ('', '')
@@ -411,6 +414,21 @@ class RBDTestCase(test.TestCase):
         proxy.__enter__.return_value = proxy
 
         proxy.unprotect_snap.side_effect = (
+            self.mock_rbd.ImageNotFound)
+
+        self.driver.delete_snapshot(self.snapshot)
+
+        proxy.remove_snap.assert_called_with(self.snapshot.name)
+        proxy.unprotect_snap.assert_called_with(self.snapshot.name)
+
+    @common_mocks
+    @mock.patch('cinder.objects.Volume.get_by_id')
+    def test_delete_notfound_on_remove_snapshot(self, volume_get_by_id):
+        volume_get_by_id.return_value = self.volume_a
+        proxy = self.mock_proxy.return_value
+        proxy.__enter__.return_value = proxy
+
+        proxy.remove_snap.side_effect = (
             self.mock_rbd.ImageNotFound)
 
         self.driver.delete_snapshot(self.snapshot)
@@ -770,8 +788,8 @@ class RBDTestCase(test.TestCase):
             vendor_name='Open Source',
             driver_version=self.driver.VERSION,
             storage_protocol='ceph',
-            total_capacity_gb=27,
-            free_capacity_gb=26,
+            total_capacity_gb=28.44,
+            free_capacity_gb=27.0,
             reserved_percentage=0,
             multiattach=False)
 
@@ -841,8 +859,13 @@ class RBDTestCase(test.TestCase):
             self.assertDictMatch(expected, actual)
             self.assertTrue(mock_get_mon_addrs.called)
 
+    @ddt.data({'rbd_chunk_size': 1, 'order': 20},
+              {'rbd_chunk_size': 8, 'order': 23},
+              {'rbd_chunk_size': 32, 'order': 25})
+    @ddt.unpack
     @common_mocks
-    def test_clone(self):
+    def test_clone(self, rbd_chunk_size, order):
+        self.cfg.rbd_store_chunk_size = rbd_chunk_size
         src_pool = u'images'
         src_image = u'image-name'
         src_snap = u'snapshot-name'
@@ -863,7 +886,8 @@ class RBDTestCase(test.TestCase):
 
         args = [client_stack[0].ioctx, str(src_image), str(src_snap),
                 client_stack[1].ioctx, str(self.volume_a.name)]
-        kwargs = {'features': client.features}
+        kwargs = {'features': client.features,
+                  'order': order}
         self.mock_rbd.RBD.return_value.clone.assert_called_once_with(
             *args, **kwargs)
         self.assertEqual(2, client.__enter__.call_count)
@@ -883,7 +907,7 @@ class RBDTestCase(test.TestCase):
                 'extra_specs': {}}
         updates = {'name': 'testvolume',
                    'host': 'currenthost',
-                   'id': 'fakeid'}
+                   'id': fake.VOLUME_ID}
         fake_type = 'high-IOPS'
         volume = fake_volume.fake_volume_obj(context, **updates)
 

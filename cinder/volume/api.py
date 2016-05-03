@@ -390,8 +390,8 @@ class API(base.Base):
 
         if not result:
             status = utils.build_or_str(expected.get('status'),
-                                        _(' status must be %s and '))
-            msg = _('Volume%s must not be migrating, attached, belong to a '
+                                        _('status must be %s and'))
+            msg = _('Volume %s must not be migrating, attached, belong to a '
                     'consistency group or have snapshots.') % status
             LOG.info(msg)
             raise exception.InvalidVolume(reason=msg)
@@ -425,8 +425,8 @@ class API(base.Base):
             try:
                 self.key_manager.delete_key(context, encryption_key_id)
             except Exception as e:
-                msg = _("Unable to delete encrypted volume: %s.") % e.msg
-                raise exception.InvalidVolume(reason=msg)
+                LOG.warning(_LW("Unable to delete encryption key for "
+                                "volume: %s."), e.msg, resource=volume)
 
         self.volume_rpcapi.delete_volume(context,
                                          volume,
@@ -523,6 +523,7 @@ class API(base.Base):
         return volumes
 
     def get_snapshot(self, context, snapshot_id):
+        check_policy(context, 'get_snapshot')
         snapshot = objects.Snapshot.get_by_id(context, snapshot_id)
 
         # FIXME(jdg): The objects don't have the db name entries
@@ -942,8 +943,8 @@ class API(base.Base):
         result = snapshot.conditional_update({'status': 'deleting'}, expected)
         if not result:
             status = utils.build_or_str(expected.get('status'),
-                                        _(' status must be %s and '))
-            msg = (_('Snapshot%s must not be part of a consistency group.') %
+                                        _('status must be %s and'))
+            msg = (_('Snapshot %s must not be part of a consistency group.') %
                    status)
             LOG.error(msg)
             raise exception.InvalidSnapshot(reason=msg)
@@ -1187,6 +1188,12 @@ class API(base.Base):
                     "container_format": recv_metadata['container_format'],
                     "disk_format": recv_metadata['disk_format'],
                     "image_name": recv_metadata.get('name', None)}
+        if 'protected' in recv_metadata:
+            response['protected'] = recv_metadata.get('protected')
+        if 'is_public' in recv_metadata:
+            response['is_public'] = recv_metadata.get('is_public')
+        elif 'visibility' in recv_metadata:
+            response['visibility'] = recv_metadata.get('visibility')
         LOG.info(_LI("Copy volume to image completed successfully."),
                  resource=volume)
         return response
@@ -1207,6 +1214,15 @@ class API(base.Base):
                      "extended: %(new_size)s).") % {'new_size': new_size,
                                                     'size': volume.size})
             raise exception.InvalidInput(reason=msg)
+
+        try:
+            values = {'per_volume_gigabytes': new_size}
+            QUOTAS.limit_check(context, project_id=context.project_id,
+                               **values)
+        except exception.OverQuota as e:
+            quotas = e.kwargs['quotas']
+            raise exception.VolumeSizeExceedsLimit(
+                size=new_size, limit=quotas['per_volume_gigabytes'])
 
         try:
             reserve_opts = {'gigabytes': size_increase}
@@ -1524,13 +1540,18 @@ class API(base.Base):
             elevated = context.elevated()
             try:
                 svc_host = volume_utils.extract_host(host, 'backend')
-                service = objects.Service.get_by_host_and_topic(
-                    elevated, svc_host, CONF.volume_topic)
+                service = objects.Service.get_by_args(
+                    elevated, svc_host, 'cinder-volume')
             except exception.ServiceNotFound:
                 with excutils.save_and_reraise_exception():
                     LOG.error(_LE('Unable to find service: %(service)s for '
                                   'given host: %(host)s.'),
                               {'service': CONF.volume_topic, 'host': host})
+            if service.disabled:
+                LOG.error(_LE('Unable to manage_existing volume on a disabled '
+                              'service.'))
+                raise exception.ServiceUnavailable()
+
             availability_zone = service.get('availability_zone')
 
         manage_what = {
@@ -1569,13 +1590,19 @@ class API(base.Base):
                                  metadata=None):
         host = volume_utils.extract_host(volume['host'])
         try:
-            objects.Service.get_by_host_and_topic(context.elevated(), host,
-                                                  CONF.volume_topic)
+            # NOTE(jdg): We don't use this, we just make sure it's valid
+            # and exists before sending off the call
+            service = objects.Service.get_by_args(
+                context.elevated(), host, 'cinder-volume')
         except exception.ServiceNotFound:
             with excutils.save_and_reraise_exception():
                 LOG.error(_LE('Unable to find service: %(service)s for '
                               'given host: %(host)s.'),
                           {'service': CONF.volume_topic, 'host': host})
+        if service.disabled:
+            LOG.error(_LE('Unable to manage_existing snapshot on a disabled '
+                          'service.'))
+            raise exception.ServiceUnavailable()
 
         snapshot_object = self.create_snapshot_in_db(context, volume, name,
                                                      description, False,
@@ -1595,7 +1622,7 @@ class API(base.Base):
         svc_host = volume_utils.extract_host(host, 'backend')
 
         service = objects.Service.get_by_args(
-            ctxt, svc_host, CONF.volume_topic)
+            ctxt, svc_host, 'cinder-volume')
         expected = {'replication_status': [fields.ReplicationStatus.ENABLED,
                     fields.ReplicationStatus.FAILED_OVER]}
         result = service.conditional_update(
@@ -1608,19 +1635,15 @@ class API(base.Base):
                    % expected_status)
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
-        active_backend_id = self.volume_rpcapi.failover_host(
-            ctxt, host,
-            secondary_id)
-        return active_backend_id
+        self.volume_rpcapi.failover_host(ctxt, host, secondary_id)
 
     def freeze_host(self, ctxt, host):
 
         ctxt = context.get_admin_context()
         svc_host = volume_utils.extract_host(host, 'backend')
 
-        # NOTE(jdg): get_by_host_and_topic filters out disabled
         service = objects.Service.get_by_args(
-            ctxt, svc_host, CONF.volume_topic)
+            ctxt, svc_host, 'cinder-volume')
         expected = {'frozen': False}
         result = service.conditional_update(
             {'frozen': True}, expected)
@@ -1639,9 +1662,8 @@ class API(base.Base):
         ctxt = context.get_admin_context()
         svc_host = volume_utils.extract_host(host, 'backend')
 
-        # NOTE(jdg): get_by_host_and_topic filters out disabled
         service = objects.Service.get_by_args(
-            ctxt, svc_host, CONF.volume_topic)
+            ctxt, svc_host, 'cinder-volume')
         expected = {'frozen': True}
         result = service.conditional_update(
             {'frozen': False}, expected)
@@ -1652,27 +1674,66 @@ class API(base.Base):
         if not self.volume_rpcapi.thaw_host(ctxt, host):
             return "Backend reported error during thaw_host operation."
 
-    def check_volume_filters(self, filters):
-        '''Sets the user filter value to accepted format'''
+    def check_volume_filters(self, filters, strict=False):
+        """Sets the user filter value to accepted format"""
         booleans = self.db.get_booleans_for_table('volume')
 
         # To translate any true/false equivalent to True/False
         # which is only acceptable format in database queries.
-        accepted_true = ['True', 'true', 'TRUE']
-        accepted_false = ['False', 'false', 'FALSE']
-        for k, v in filters.items():
+
+        for key, val in filters.items():
             try:
-                if k in booleans:
-                    if v in accepted_false:
-                        filters[k] = False
-                    elif v in accepted_true:
-                        filters[k] = True
-                    else:
-                        filters[k] = bool(v)
+                if key in booleans:
+                    filters[key] = self._check_boolean_filter_value(
+                        key, val, strict)
+                elif key == 'display_name':
+                    # Use the raw value of display name as is for the filter
+                    # without passing it through ast.literal_eval(). If the
+                    # display name is a properly quoted string (e.g. '"foo"')
+                    # then literal_eval() strips the quotes (i.e. 'foo'), so
+                    # the filter becomes different from the user input.
+                    continue
                 else:
-                    filters[k] = ast.literal_eval(v)
+                    filters[key] = ast.literal_eval(val)
             except (ValueError, SyntaxError):
-                LOG.debug('Could not evaluate value %s, assuming string', v)
+                LOG.debug('Could not evaluate value %s, assuming string', val)
+
+    def _check_boolean_filter_value(self, key, val, strict=False):
+        """Boolean filter values in Volume GET.
+
+        Before V3.2, all values other than 'False', 'false', 'FALSE' were
+        trated as True for specific boolean filter parameters in Volume
+        GET request.
+
+        But V3.2 onwards, only true/True/0/1/False/false parameters are
+        supported.
+        All other input values to specific boolean filter parameter will
+        lead to raising exception.
+
+        This changes API behavior. So, micro version introduced for V3.2
+        onwards.
+        """
+        if strict:
+            # for updated behavior, from V3.2 onwards.
+            # To translate any true/false/t/f/0/1 to True/False
+            # which is only acceptable format in database queries.
+            try:
+                return strutils.bool_from_string(val, strict=True)
+            except ValueError:
+                msg = _('\'%(key)s = %(value)s\'') % {'key': key,
+                                                      'value': val}
+                raise exception.InvalidInput(reason=msg)
+        else:
+            # For existing behavior(before version 3.2)
+            accepted_true = ['True', 'true', 'TRUE']
+            accepted_false = ['False', 'false', 'FALSE']
+
+            if val in accepted_false:
+                return False
+            elif val in accepted_true:
+                return True
+            else:
+                return bool(val)
 
 
 class HostAPI(base.Base):

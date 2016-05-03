@@ -1,4 +1,4 @@
-#    Copyright 2015 Dell Inc.
+#    Copyright 2016 Dell Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -17,7 +17,6 @@ from oslo_log import log as logging
 from oslo_utils import excutils
 
 from cinder import exception
-from cinder import objects
 from cinder.i18n import _, _LE, _LI, _LW
 from cinder.volume import driver
 from cinder.volume.drivers.dell import dell_storagecenter_api
@@ -50,7 +49,7 @@ CONF.register_opts(common_opts)
 
 
 class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
-                       driver.ExtendVD,
+                       driver.ExtendVD, driver.ManageableSnapshotsVD,
                        driver.SnapshotVD, driver.BaseVD):
 
     def __init__(self, *args, **kwargs):
@@ -62,6 +61,9 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         self.backends = self.configuration.safe_get('replication_device')
         self.replication_enabled = True if self.backends else False
         self.is_direct_connect = False
+        self.active_backend_id = kwargs.get('active_backend_id', None)
+        self.failed_over = (self.active_backend_id is not None)
+        self.storage_protocol = 'iSCSI'
 
     def _bytes_to_gb(self, spacestring):
         """Space is returned in a string like ...
@@ -89,7 +91,7 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         specific helpers.
         """
         self._client = dell_storagecenter_api.StorageCenterApiHelper(
-            self.configuration)
+            self.configuration, self.active_backend_id, self.storage_protocol)
 
     def check_for_setup_error(self):
         """Validates the configuration information."""
@@ -101,11 +103,10 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
                         'not supported with direct connect.')
                 raise exception.InvalidHost(reason=msg)
 
-            if self.replication_enabled:
+            # If we are a healthy replicated system make sure our backend
+            # is alive.
+            if self.replication_enabled and not self.failed_over:
                 # Check that our replication destinations are available.
-                # TODO(tswanson): Check if we need a diskfolder.  (Or not.)
-                # TODO(tswanson): Can we check that the backend specifies
-                # TODO(tswanson): the same ssn as target_device_id.
                 for backend in self.backends:
                     replssn = backend['target_device_id']
                     try:
@@ -151,7 +152,8 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         """
         do_repl = False
         sync = False
-        if not self.is_direct_connect:
+        # Repl does not work with direct connect.
+        if not self.failed_over and not self.is_direct_connect:
             specs = self._get_volume_extra_specs(volume)
             do_repl = specs.get('replication_enabled') == '<is> True'
             sync = specs.get('replication_type') == '<in> sync'
@@ -226,21 +228,23 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         scvolume = None
         with self._client.open_connection() as api:
             try:
-                if api.find_sc():
-                    scvolume = api.create_volume(volume_name,
-                                                 volume_size,
-                                                 storage_profile,
-                                                 replay_profile_string)
-                    if scvolume is None:
-                        raise exception.VolumeBackendAPIException(
-                            message=_('Unable to create volume %s') %
-                            volume_name)
+                scvolume = api.create_volume(volume_name,
+                                             volume_size,
+                                             storage_profile,
+                                             replay_profile_string)
+                if scvolume is None:
+                    raise exception.VolumeBackendAPIException(
+                        message=_('Unable to create volume %s') %
+                        volume_name)
 
                 # Update Consistency Group
                 self._add_volume_to_consistency_group(api, scvolume, volume)
 
                 # Create replications. (Or not. It checks.)
                 model_update = self._create_replications(api, volume, scvolume)
+
+                # Save our provider_id.
+                model_update['provider_id'] = scvolume['instanceId']
 
             except Exception:
                 # if we actually created a volume but failed elsewhere
@@ -255,12 +259,22 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
 
         return model_update
 
-    def _split(self, replication_driver_data):
+    def _split_driver_data(self, replication_driver_data):
+        """Splits the replication_driver_data into an array of ssn strings.
+
+        :param replication_driver_data: A string of comma separated SSNs.
+        :returns: SSNs in an array of strings.
+        """
         ssnstrings = []
+        # We have any replication_driver_data.
         if replication_driver_data:
+            # Split the array and wiffle through the entries.
             for str in replication_driver_data.split(','):
+                # Strip any junk from the string.
                 ssnstring = str.strip()
+                # Anything left?
                 if ssnstring:
+                    # Add it to our array.
                     ssnstrings.append(ssnstring)
         return ssnstrings
 
@@ -277,20 +291,22 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         """
         do_repl, sync = self._do_repl(api, volume)
         if do_repl:
-            volume_name = volume.get('id')
-            scvol = api.find_volume(volume_name)
             replication_driver_data = volume.get('replication_driver_data')
-            # This is just a string of ssns separated by commas.
-            ssnstrings = self._split(replication_driver_data)
-            # Trundle through these and delete them all.
-            for ssnstring in ssnstrings:
-                ssn = int(ssnstring)
-                if not api.delete_replication(scvol, ssn):
-                    LOG.warning(_LW('Unable to delete replication of '
-                                    'Volume %(vname)s to Storage Center '
-                                    '%(sc)s.'),
-                                {'vname': volume_name,
-                                 'sc': ssnstring})
+            if replication_driver_data:
+                ssnstrings = self._split_driver_data(replication_driver_data)
+                volume_name = volume.get('id')
+                provider_id = volume.get('provider_id')
+                scvol = api.find_volume(volume_name, provider_id)
+                # This is just a string of ssns separated by commas.
+                # Trundle through these and delete them all.
+                for ssnstring in ssnstrings:
+                    ssn = int(ssnstring)
+                    if not api.delete_replication(scvol, ssn):
+                        LOG.warning(_LW('Unable to delete replication of '
+                                        'Volume %(vname)s to Storage Center '
+                                        '%(sc)s.'),
+                                    {'vname': volume_name,
+                                     'sc': ssnstring})
         # If none of that worked or there was nothing to do doesn't matter.
         # Just move on.
 
@@ -298,12 +314,12 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         deleted = False
         # We use id as our name as it is unique.
         volume_name = volume.get('id')
+        provider_id = volume.get('provider_id')
         LOG.debug('Deleting volume %s', volume_name)
         with self._client.open_connection() as api:
             try:
-                if api.find_sc():
-                    self._delete_replications(api, volume)
-                    deleted = api.delete_volume(volume_name)
+                self._delete_replications(api, volume)
+                deleted = api.delete_volume(volume_name, provider_id)
             except Exception:
                 with excutils.save_and_reraise_exception():
                     LOG.error(_LE('Failed to delete volume %s'),
@@ -319,22 +335,23 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         """Create snapshot"""
         # our volume name is the volume id
         volume_name = snapshot.get('volume_id')
+        # TODO(tswanson): Is there any reason to think this will be set
+        # before I create the snapshot? Doesn't hurt to try to get it.
+        provider_id = snapshot.get('provider_id')
         snapshot_id = snapshot.get('id')
         LOG.debug('Creating snapshot %(snap)s on volume %(vol)s',
                   {'snap': snapshot_id,
                    'vol': volume_name})
         with self._client.open_connection() as api:
-            if api.find_sc():
-                scvolume = api.find_volume(volume_name)
-                if scvolume is not None:
-                    if api.create_replay(scvolume,
-                                         snapshot_id,
-                                         0) is not None:
-                        snapshot['status'] = 'available'
-                        return
-                else:
-                    LOG.warning(_LW('Unable to locate volume:%s'),
-                                volume_name)
+            scvolume = api.find_volume(volume_name, provider_id)
+            if scvolume is not None:
+                replay = api.create_replay(scvolume, snapshot_id, 0)
+                if replay:
+                    return {'status': 'available',
+                            'provider_id': scvolume['instanceId']}
+            else:
+                LOG.warning(_LW('Unable to locate volume:%s'),
+                            volume_name)
 
         snapshot['status'] = 'error_creating'
         msg = _('Failed to create snapshot %s') % snapshot_id
@@ -344,6 +361,8 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         """Create new volume from other volume's snapshot on appliance."""
         model_update = {}
         scvolume = None
+        volume_name = volume.get('id')
+        src_provider_id = snapshot.get('provider_id')
         src_volume_name = snapshot.get('volume_id')
         # This snapshot could have been created on its own or as part of a
         # cgsnapshot.  If it was a cgsnapshot it will be identified on the Dell
@@ -354,7 +373,6 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         snapshot_id = snapshot.get('cgsnapshot_id')
         if not snapshot_id:
             snapshot_id = snapshot.get('id')
-        volume_name = volume.get('id')
         LOG.debug(
             'Creating new volume %(vol)s from snapshot %(snap)s '
             'from vol %(src)s',
@@ -363,34 +381,42 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
              'src': src_volume_name})
         with self._client.open_connection() as api:
             try:
-                if api.find_sc():
-                    srcvol = api.find_volume(src_volume_name)
-                    if srcvol is not None:
-                        replay = api.find_replay(srcvol,
-                                                 snapshot_id)
-                        if replay is not None:
-                            volume_name = volume.get('id')
-                            # See if we have any extra specs.
-                            specs = self._get_volume_extra_specs(volume)
-                            replay_profile_string = specs.get(
-                                'storagetype:replayprofiles')
-                            scvolume = api.create_view_volume(
-                                volume_name, replay, replay_profile_string)
-                            if scvolume is None:
-                                raise exception.VolumeBackendAPIException(
-                                    message=_('Unable to create volume '
-                                              '%(name)s from %(snap)s.') %
-                                    {'name': volume_name,
-                                     'snap': snapshot_id})
+                srcvol = api.find_volume(src_volume_name, src_provider_id)
+                if srcvol is not None:
+                    replay = api.find_replay(srcvol, snapshot_id)
+                    if replay is not None:
+                        # See if we have any extra specs.
+                        specs = self._get_volume_extra_specs(volume)
+                        replay_profile_string = specs.get(
+                            'storagetype:replayprofiles')
+                        scvolume = api.create_view_volume(
+                            volume_name, replay, replay_profile_string)
 
-                            # Update Consistency Group
-                            self._add_volume_to_consistency_group(api,
-                                                                  scvolume,
-                                                                  volume)
-                            # Replicate if we are supposed to.
-                            model_update = self._create_replications(api,
-                                                                     volume,
-                                                                     scvolume)
+                        # Extend Volume
+                        if scvolume and (volume['size'] >
+                                         snapshot["volume_size"]):
+                            LOG.debug('Resize the new volume to %s.',
+                                      volume['size'])
+                            scvolume = api.expand_volume(scvolume,
+                                                         volume['size'])
+                        if scvolume is None:
+                            raise exception.VolumeBackendAPIException(
+                                message=_('Unable to create volume '
+                                          '%(name)s from %(snap)s.') %
+                                {'name': volume_name,
+                                 'snap': snapshot_id})
+
+                        # Update Consistency Group
+                        self._add_volume_to_consistency_group(api,
+                                                              scvolume,
+                                                              volume)
+                        # Replicate if we are supposed to.
+                        model_update = self._create_replications(api,
+                                                                 volume,
+                                                                 scvolume)
+                        # Save our instanceid.
+                        model_update['provider_id'] = (
+                            scvolume['instanceId'])
 
             except Exception:
                 # Clean up after ourselves.
@@ -413,37 +439,46 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         model_update = {}
         scvolume = None
         src_volume_name = src_vref.get('id')
+        src_provider_id = src_vref.get('provider_id')
         volume_name = volume.get('id')
         LOG.debug('Creating cloned volume %(clone)s from volume %(vol)s',
                   {'clone': volume_name,
                    'vol': src_volume_name})
         with self._client.open_connection() as api:
             try:
-                if api.find_sc():
-                    srcvol = api.find_volume(src_volume_name)
-                    if srcvol is not None:
-                        # See if we have any extra specs.
-                        specs = self._get_volume_extra_specs(volume)
-                        replay_profile_string = specs.get(
-                            'storagetype:replayprofiles')
-                        # Create our volume
-                        scvolume = api.create_cloned_volume(
-                            volume_name, srcvol, replay_profile_string)
-                        if scvolume is None:
-                            raise exception.VolumeBackendAPIException(
-                                message=_('Unable to create volume '
-                                          '%(name)s from %(vol)s.') %
-                                {'name': volume_name,
-                                 'vol': src_volume_name})
+                srcvol = api.find_volume(src_volume_name, src_provider_id)
+                if srcvol is not None:
+                    # See if we have any extra specs.
+                    specs = self._get_volume_extra_specs(volume)
+                    replay_profile_string = specs.get(
+                        'storagetype:replayprofiles')
+                    # Create our volume
+                    scvolume = api.create_cloned_volume(
+                        volume_name, srcvol, replay_profile_string)
 
-                        # Update Consistency Group
-                        self._add_volume_to_consistency_group(api,
-                                                              scvolume,
-                                                              volume)
-                        # Replicate if we are supposed to.
-                        model_update = self._create_replications(api,
-                                                                 volume,
-                                                                 scvolume)
+                    # Extend Volume
+                    if scvolume and volume['size'] > src_vref['size']:
+                        LOG.debug('Resize the volume to %s.', volume['size'])
+                        scvolume = api.expand_volume(scvolume, volume['size'])
+
+                    # If either of those didn't work we bail.
+                    if scvolume is None:
+                        raise exception.VolumeBackendAPIException(
+                            message=_('Unable to create volume '
+                                      '%(name)s from %(vol)s.') %
+                            {'name': volume_name,
+                             'vol': src_volume_name})
+
+                    # Update Consistency Group
+                    self._add_volume_to_consistency_group(api,
+                                                          scvolume,
+                                                          volume)
+                    # Replicate if we are supposed to.
+                    model_update = self._create_replications(api,
+                                                             volume,
+                                                             scvolume)
+                    # Save our provider_id.
+                    model_update['provider_id'] = scvolume['instanceId']
             except Exception:
                 # Clean up after ourselves.
                 self._cleanup_failed_create_volume(api, volume_name)
@@ -463,16 +498,14 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         """delete_snapshot"""
         volume_name = snapshot.get('volume_id')
         snapshot_id = snapshot.get('id')
+        provider_id = snapshot.get('provider_id')
         LOG.debug('Deleting snapshot %(snap)s from volume %(vol)s',
                   {'snap': snapshot_id,
                    'vol': volume_name})
         with self._client.open_connection() as api:
-            if api.find_sc():
-                scvolume = api.find_volume(volume_name)
-                if scvolume is not None:
-                    if api.delete_replay(scvolume,
-                                         snapshot_id):
-                        return
+            scvolume = api.find_volume(volume_name, provider_id)
+            if scvolume and api.delete_replay(scvolume, snapshot_id):
+                return
         # if we are here things went poorly.
         snapshot['status'] = 'error_deleting'
         msg = _('Failed to delete snapshot %s') % snapshot_id
@@ -484,7 +517,6 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         The volume exists on creation and will be visible on
         initialize connection.  So nothing to do here.
         """
-        # TODO(tswanson): Move mapping code here.
         pass
 
     def ensure_export(self, context, volume):
@@ -495,11 +527,11 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         """
         scvolume = None
         volume_name = volume.get('id')
+        provider_id = volume.get('provider_id')
         LOG.debug('Checking existence of volume %s', volume_name)
         with self._client.open_connection() as api:
             try:
-                if api.find_sc():
-                    scvolume = api.find_volume(volume_name)
+                scvolume = api.find_volume(volume_name, provider_id)
             except Exception:
                 with excutils.save_and_reraise_exception():
                     LOG.error(_LE('Failed to ensure export of volume %s'),
@@ -519,15 +551,15 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
     def extend_volume(self, volume, new_size):
         """Extend the size of the volume."""
         volume_name = volume.get('id')
+        provider_id = volume.get('provider_id')
         LOG.debug('Extending volume %(vol)s to %(size)s',
                   {'vol': volume_name,
                    'size': new_size})
         if volume is not None:
             with self._client.open_connection() as api:
-                if api.find_sc():
-                    scvolume = api.find_volume(volume_name)
-                    if api.expand_volume(scvolume, new_size) is not None:
-                        return
+                scvolume = api.find_volume(volume_name, provider_id)
+                if api.expand_volume(scvolume, new_size) is not None:
+                    return
         # If we are here nothing good happened.
         msg = _('Unable to extend volume %s') % volume_name
         raise exception.VolumeBackendAPIException(data=msg)
@@ -545,32 +577,37 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
     def _update_volume_stats(self):
         """Retrieve stats info from volume group."""
         with self._client.open_connection() as api:
-            storageusage = api.get_storage_usage() if api.find_sc() else None
+            storageusage = api.get_storage_usage()
+            if not storageusage:
+                msg = _('Unable to retrieve volume stats.')
+                raise exception.VolumeBackendAPIException(message=msg)
 
             # all of this is basically static for now
             data = {}
             data['volume_backend_name'] = self.backend_name
             data['vendor_name'] = 'Dell'
             data['driver_version'] = self.VERSION
-            data['storage_protocol'] = 'iSCSI'
+            data['storage_protocol'] = self.storage_protocol
             data['reserved_percentage'] = 0
-            data['free_capacity_gb'] = 'unavailable'
-            data['total_capacity_gb'] = 'unavailable'
             data['consistencygroup_support'] = True
-            # In theory if storageusage is None then we should have
-            # blown up getting it.  If not just report unavailable.
-            if storageusage is not None:
-                totalcapacity = storageusage.get('availableSpace')
-                totalcapacitygb = self._bytes_to_gb(totalcapacity)
-                data['total_capacity_gb'] = totalcapacitygb
-                freespace = storageusage.get('freeSpace')
-                freespacegb = self._bytes_to_gb(freespace)
-                data['free_capacity_gb'] = freespacegb
+            totalcapacity = storageusage.get('availableSpace')
+            totalcapacitygb = self._bytes_to_gb(totalcapacity)
+            data['total_capacity_gb'] = totalcapacitygb
+            freespace = storageusage.get('freeSpace')
+            freespacegb = self._bytes_to_gb(freespace)
+            data['free_capacity_gb'] = freespacegb
             data['QoS_support'] = False
             data['replication_enabled'] = self.replication_enabled
             if self.replication_enabled:
                 data['replication_type'] = ['async', 'sync']
                 data['replication_count'] = len(self.backends)
+                replication_targets = []
+                # Trundle through our backends.
+                for backend in self.backends:
+                    target_device_id = backend.get('target_device_id')
+                    if target_device_id:
+                        replication_targets.append(target_device_id)
+                data['replication_targets'] = replication_targets
 
             self._stats = data
             LOG.debug('Total cap %(total)s Free cap %(free)s',
@@ -591,22 +628,24 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         # volume to the original volume name.
         original_volume_name = volume.get('id')
         current_name = new_volume.get('id')
+        # We should have this. If we don't we'll set it below.
+        provider_id = new_volume.get('provider_id')
         LOG.debug('update_migrated_volume: %(current)s to %(original)s',
                   {'current': current_name,
                    'original': original_volume_name})
         if original_volume_name:
             with self._client.open_connection() as api:
-                if api.find_sc():
-                    scvolume = api.find_volume(current_name)
-                    if (scvolume and
-                       api.rename_volume(scvolume, original_volume_name)):
-                        # Replicate if we are supposed to.
-                        model_update = self._create_replications(api,
-                                                                 new_volume,
-                                                                 scvolume)
-                        model_update['_name_id'] = None
+                scvolume = api.find_volume(current_name, provider_id)
+                if (scvolume and
+                   api.rename_volume(scvolume, original_volume_name)):
+                    # Replicate if we are supposed to.
+                    model_update = self._create_replications(api,
+                                                             new_volume,
+                                                             scvolume)
+                    model_update['_name_id'] = None
+                    model_update['provider_id'] = scvolume['instanceId']
 
-                        return model_update
+                    return model_update
         # The world was horrible to us so we should error and leave.
         LOG.error(_LE('Unable to rename the logical volume for volume: %s'),
                   original_volume_name)
@@ -645,8 +684,6 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
         # If we are here because we found no profile that should be fine
         # as we are trying to delete it anyway.
 
-        # Now whack the volumes.  So get our list.
-        volumes = self.db.volume_get_all_by_group(context, gid)
         # Trundle through the list deleting the volumes.
         for volume in volumes:
             self.delete_volume(volume)
@@ -702,6 +739,7 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
 
         :param context: the context of the caller.
         :param cgsnapshot: Information about the snapshot to take.
+        :param snapshots: List of snapshots for this cgsnapshot.
         :returns: Updated model_update, snapshots.
         :raises: VolumeBackendAPIException.
         """
@@ -713,14 +751,16 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
             if profile:
                 LOG.debug('profile %s replayid %s', profile, snapshotid)
                 if api.snap_cg_replay(profile, snapshotid, 0):
-                    snapshots = objects.SnapshotList().get_all_for_cgsnapshot(
-                        context, snapshotid)
+                    snapshot_updates = []
                     for snapshot in snapshots:
-                        snapshot.status = 'available'
+                        snapshot_updates.append({
+                            'id': snapshot.id,
+                            'status': 'available'
+                        })
 
                     model_update = {'status': 'available'}
 
-                    return model_update, snapshots
+                    return model_update, snapshot_updates
 
                 # That didn't go well.  Tell them why.  Then bomb out.
                 LOG.error(_LE('Failed to snap Consistency Group %s'), cgid)
@@ -755,8 +795,6 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
                            % snapshotid)
                     raise exception.VolumeBackendAPIException(data=msg)
 
-            snapshots = objects.SnapshotList().get_all_for_cgsnapshot(
-                context, snapshotid)
             for snapshot in snapshots:
                 snapshot.status = 'deleted'
 
@@ -794,7 +832,7 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
 
         :param volume:       Cinder volume to manage
         :param existing_ref: Driver-specific information used to identify a
-        volume
+                             volume
         """
         if existing_ref.get('source-name') or existing_ref.get('source-id'):
             with self._client.open_connection() as api:
@@ -818,7 +856,7 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
 
         :param volume:       Cinder volume to manage
         :param existing_ref: Driver-specific information used to identify a
-        volume
+                             volume
         """
         if existing_ref.get('source-name') or existing_ref.get('source-id'):
             with self._client.open_connection() as api:
@@ -967,98 +1005,18 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
             return model_update
         return True
 
-    def replication_enable(self, context, vref):
-        """Re-enable replication on vref.
-
-        :param context: NA
-        :param vref: Cinder volume reference.
-        :return: model_update.
-        """
-        volumename = vref.get('id')
-        LOG.info(_LI('Enabling replication on %s'), volumename)
-        model_update = {}
-        with self._client.open_connection() as api:
-            replication_driver_data = vref.get('replication_driver_data')
-            destssns = self._split(replication_driver_data)
-            do_repl, sync = self._do_repl(api, vref)
-            if destssns and do_repl:
-                scvolume = api.find_volume(volumename)
-                if scvolume:
-                    for destssn in destssns:
-                        if not api.resume_replication(scvolume, int(destssn)):
-                            LOG.error(_LE('Unable to resume replication on '
-                                          'volume %(vol)s to SC %(ssn)s'),
-                                      {'vol': volumename,
-                                       'ssn': destssn})
-                            model_update['replication_status'] = 'error'
-                            break
-                else:
-                    LOG.error(_LE('Volume %s not found'), volumename)
-            else:
-                LOG.error(_LE('Replication not enabled or no replication '
-                              'destinations found.  %s'),
-                          volumename)
-        return model_update
-
-    def replication_disable(self, context, vref):
-        """Disable replication on vref.
-
-        :param context: NA
-        :param vref: Cinder volume reference.
-        :return: model_update.
-        """
-        volumename = vref.get('id')
-        LOG.info(_LI('Disabling replication on %s'), volumename)
-        model_update = {}
-        with self._client.open_connection() as api:
-            replication_driver_data = vref.get('replication_driver_data')
-            destssns = self._split(replication_driver_data)
-            do_repl, sync = self._do_repl(api, vref)
-            if destssns and do_repl:
-                scvolume = api.find_volume(volumename)
-                if scvolume:
-                    for destssn in destssns:
-                        if not api.pause_replication(scvolume, int(destssn)):
-                            LOG.error(_LE('Unable to pause replication on '
-                                          'volume %(vol)s to SC %(ssn)s'),
-                                      {'vol': volumename,
-                                       'ssn': destssn})
-                            model_update['replication_status'] = 'error'
-                            break
-                else:
-                    LOG.error(_LE('Volume %s not found'), volumename)
-            else:
-                LOG.error(_LE('Replication not enabled or no replication '
-                              'destinations found.  %s'),
-                          volumename)
-        return model_update
-
-    def _find_host(self, ssnstring):
-        """Find the backend associated with this ssnstring.
-
-        :param ssnstring: The ssn of the storage center we are looking for.
-        :return: The managed_backend_name associated with said storage center.
-        """
-        for backend in self.backends:
-            if ssnstring == backend['target_device_id']:
-                return backend['managed_backend_name']
-        return None
-
-    def _parse_secondary(self, api, vref, secondary):
+    def _parse_secondary(self, api, secondary):
         """Find the replication destination associated with secondary.
 
         :param api: Dell StorageCenterApi
-        :param vref: Cinder Volume
         :param secondary: String indicating the secondary to failover to.
-        :return: Destination SSN and the host string for the given secondary.
+        :return: Destination SSN for the given secondary.
         """
         LOG.debug('_parse_secondary. Looking for %s.', secondary)
-        replication_driver_data = vref['replication_driver_data']
         destssn = None
-        host = None
-        ssnstrings = self._split(replication_driver_data)
-        # Trundle through these and delete them all.
-        for ssnstring in ssnstrings:
+        # Trundle through these looking for our secondary.
+        for backend in self.backends:
+            ssnstring = backend['target_device_id']
             # If they list a secondary it has to match.
             # If they do not list a secondary we return the first
             # replication on a working system.
@@ -1069,142 +1027,217 @@ class DellCommonDriver(driver.ConsistencyGroupVD, driver.ManageableVD,
                 # way to pick a destination to failover to. So just
                 # look for one that is just up.
                 try:
-                    # If the SC ssn exists check if we are configured to
-                    # use it.
+                    # If the SC ssn exists use it.
                     if api.find_sc(ssn):
-                        host = self._find_host(ssnstring)
-                        # If host then we are configured.
-                        if host:
-                            # Save our ssn and get out of here.
-                            destssn = ssn
-                            break
+                        destssn = ssn
+                        break
                 except exception.VolumeBackendAPIException:
                     LOG.warning(_LW('SSN %s appears to be down.'), ssn)
-        LOG.info(_LI('replication failover secondary is %(ssn)s %(host)s'),
-                 {'ssn': destssn,
-                  'host': host})
-        return destssn, host
+        LOG.info(_LI('replication failover secondary is %(ssn)s'),
+                 {'ssn': destssn})
+        return destssn
 
-    def replication_failover(self, context, vref, secondary):
+    def _update_backend(self, active_backend_id):
+        # Update our backend id. On the next open_connection it will use this.
+        self.active_backend_id = str(active_backend_id)
+        self._client.active_backend_id = self.active_backend_id
+
+    def failover_host(self, context, volumes, secondary_id=None):
         """Failover to secondary.
 
-        The flow is as follows.
-            1.The user explicitly requests a failover of a replicated volume.
-            2.Driver breaks replication.
-                a. Neatly by deleting the SCReplication object if the
-                   primary is still up.
-                b. Brutally by unmapping the replication volume if it isn't.
-            3.We rename the volume to "Cinder failover <Volume GUID>"
-            4.Change Cinder DB entry for which backend controls the volume
-              to the backend listed in the replication_device.
-            5.That's it.
+        :param context: security context
+        :param secondary_id: Specifies rep target to fail over to
+        :param volumes: List of volumes serviced by this backend.
+        :returns: destssn, volume_updates data structure
 
-        Completion of the failover is done on first use on the new backend.
-        We do this by modifying the find_volume function.
+        Example volume_updates data structure:
 
-        Find volume searches the following places in order:
-            1. "<Volume GUID>" in the backend's volume folder.
-            2. "<Volume GUID>" outside of the volume folder.
-            3. "Cinder failover <Volume GUID>" anywhere on the system.
+        .. code-block:: json
 
-        If "Cinder failover <Volume GUID>" was found:
-            1.Volume is renamed to "<Volume GUID>".
-            2.Volume is moved to the new backend's volume folder.
-            3.The volume is now available on the secondary backend.
-
-        :param context;
-        :param vref: Cinder volume reference.
-        :param secondary:  SSN of the destination Storage Center
-        :return: model_update on failover.
+        [{'volume_id': <cinder-uuid>,
+          'updates': {'provider_id': 8,
+                      'replication_status': 'failed-over',
+                      'replication_extended_status': 'whatever',...}},]
         """
-        LOG.info(_LI('Failing replication %(vol)s to %(sec)s'),
-                 {'vol': vref.get('id'),
-                  'sec': secondary})
-        # If we fall through this is our error.
-        msg = _('Unable to failover replication.')
-        with self._client.open_connection() as api:
-            # Basic check.  We should never get here.
-            do_repl, sync = self._do_repl(api, vref)
-            if not do_repl:
-                # If we did get here then there is a disconnect.  Set our
-                # message and raise (below).
-                msg = _('Unable to failover unreplicated volume.')
-            else:
+
+        # We do not allow failback. Dragons be there.
+        if self.failed_over:
+            raise exception.VolumeBackendAPIException(message=_(
+                'Backend has already been failed over. Unable to fail back.'))
+
+        LOG.info(_LI('Failing backend to %s'), secondary_id)
+        # basic check
+        if self.replication_enabled:
+            with self._client.open_connection() as api:
                 # Look for the specified secondary.
-                destssn, host = self._parse_secondary(api, vref, secondary)
-                if destssn and host:
-                    volumename = vref.get('id')
-                    # This will break the replication on the SC side.  At the
-                    # conclusion of this the destination volume will be
-                    # renamed to indicate failover is in progress.  We will
-                    # pick the volume up on the destination backend later.
-                    if api.break_replication(volumename, destssn):
+                destssn = self._parse_secondary(api, secondary_id)
+                if destssn:
+                    # We roll through trying to break replications.
+                    # Is failing here a complete failure of failover?
+                    volume_updates = []
+                    for volume in volumes:
                         model_update = {}
-                        model_update['host'] = host
-                        model_update['replication_driver_data'] = None
-                        return model_update
-                    # We are here.  Nothing went well.
-                    LOG.error(_LE('Unable to break replication from '
-                                  '%(from)s to %(to)d.'),
-                              {'from': volumename,
-                               'to': destssn})
+                        if volume.get('replication_driver_data'):
+                            rvol = api.break_replication(
+                                volume['id'], volume.get('provider_id'),
+                                destssn)
+                            if rvol:
+                                LOG.info(_LI('Success failing over volume %s'),
+                                         volume['id'])
+                            else:
+                                LOG.info(_LI('Failed failing over volume %s'),
+                                         volume['id'])
+
+                            # We should note that we are now failed over
+                            # and that we have a new instanceId.
+                            model_update = {
+                                'replication_status': 'failed-over',
+                                'provider_id': rvol['instanceId']}
+                        else:
+                            # Not a replicated volume. Try to unmap it.
+                            scvolume = api.find_volume(
+                                volume['id'], volume.get('provider_id'))
+                            api.remove_mappings(scvolume)
+                            model_update = {'status': 'error'}
+                        # Either we are failed over or our status is now error.
+                        volume_updates.append({'volume_id': volume['id'],
+                                               'updates': model_update})
+
+                    # this is it.
+                    self._update_backend(destssn)
+                    return destssn, volume_updates
                 else:
-                    LOG.error(_LE('Unable to find valid destination.'))
+                    raise exception.InvalidInput(message=(
+                        _('replication_failover failed. %s not found.') %
+                        secondary_id))
+        # I don't think we should ever get here.
+        raise exception.VolumeBackendAPIException(message=(
+            _('replication_failover failed. '
+              'Backend not configured for failover')))
 
-        # We raise to indicate something bad happened.
-        raise exception.ReplicationError(volume_id=vref.get('id'),
-                                         reason=msg)
+    def _get_unmanaged_replay(self, api, volume_name, existing_ref):
+        replay_name = None
+        if existing_ref:
+            replay_name = existing_ref.get('source-name')
+        if not replay_name:
+            msg = _('_get_unmanaged_replay: Must specify source-name.')
+            LOG.error(msg)
+            raise exception.ManageExistingInvalidReference(
+                existing_ref=existing_ref, reason=msg)
+        # Find our volume.
+        scvolume = api.find_volume(volume_name)
+        if not scvolume:
+            # Didn't find it.
+            msg = (_('_get_unmanaged_replay: Cannot find volume id %s')
+                   % volume_name)
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+        # Find our replay.
+        screplay = api.find_replay(scvolume, replay_name)
+        if not screplay:
+            # Didn't find it. Reference must be invalid.
+            msg = (_('_get_unmanaged_replay: Cannot '
+                     'find snapshot named %s') % replay_name)
+            LOG.error(msg)
+            raise exception.ManageExistingInvalidReference(
+                existing_ref=existing_ref, reason=msg)
+        return screplay
 
-    def list_replication_targets(self, context, vref):
-        """Lists replication targets for the given vref.
+    def manage_existing_snapshot(self, snapshot, existing_ref):
+        """Brings an existing backend storage object under Cinder management.
 
-        We return targets the volume has been setup to replicate to and that
-        are configured on this backend.
+        existing_ref is passed straight through from the API request's
+        manage_existing_ref value, and it is up to the driver how this should
+        be interpreted.  It should be sufficient to identify a storage object
+        that the driver should somehow associate with the newly-created cinder
+        snapshot structure.
 
-        :param context: NA
-        :param vref: Cinder volume object.
-        :return: A dict of the form {'volume_id': id,
-                                     'targets': [ {'type': xxx,
-                                                   'target_device_id': xxx,
-                                                   'backend_name': xxx}]}
+        There are two ways to do this:
+
+        1. Rename the backend storage object so that it matches the
+           snapshot['name'] which is how drivers traditionally map between a
+           cinder snapshot and the associated backend storage object.
+
+        2. Place some metadata on the snapshot, or somewhere in the backend,
+           that allows other driver requests (e.g. delete) to locate the
+           backend storage object when required.
+
+        If the existing_ref doesn't make sense, or doesn't refer to an existing
+        backend storage object, raise a ManageExistingInvalidReference
+        exception.
         """
-        LOG.debug('list_replication_targets for volume %s', vref.get('id'))
-        targets = []
         with self._client.open_connection() as api:
-            do_repl, sync = self._do_repl(api, vref)
-            # If we have no replication_driver_data then we have no replication
-            # targets
-            replication_driver_data = vref.get('replication_driver_data')
-            ssnstrings = self._split(replication_driver_data)
-            # If we have data.
-            if ssnstrings:
-                # Trundle through our backends.
-                for backend in self.backends:
-                    # If we find a backend then we report it.
-                    if ssnstrings.count(backend['target_device_id']):
-                        target = {}
-                        target['type'] = 'managed'
-                        target['target_device_id'] = (
-                            backend['target_device_id'])
-                        target['backend_name'] = (
-                            backend['managed_backend_name'])
-                        targets.append(target)
-                    else:
-                        # We note if the source is not replicated to a
-                        # configured destination for the backend.
-                        LOG.info(_LI('Volume %(guid)s not replicated to '
-                                     'backend %(name)s'),
-                                 {'guid': vref['id'],
-                                  'name': backend['managed_backend_name']})
-            # At this point we note that what we found and what we
-            # expected to find were two different things.
-            if len(ssnstrings) != len(targets):
-                LOG.warning(_LW('Expected replication count %(rdd)d does '
-                                'match configured replication count '
-                                '%(tgt)d.'),
-                            {'rdd': len(ssnstrings),
-                             'tgt': len(targets)})
-        # Format response.
-        replication_targets = {'volume_id': vref.get('id'), 'targets': targets}
-        LOG.info(_LI('list_replication_targets: %s'), replication_targets)
-        return replication_targets
+            # Find our unmanaged snapshot. This will raise on error.
+            volume_name = snapshot.get('volume_id')
+            snapshot_id = snapshot.get('id')
+            screplay = self._get_unmanaged_replay(api, volume_name,
+                                                  existing_ref)
+            # Manage means update description and update expiration.
+            if not api.manage_replay(screplay, snapshot_id):
+                # That didn't work. Error.
+                msg = (_('manage_existing_snapshot: Error managing '
+                         'existing replay %(ss)s on volume %(vol)s') %
+                       {'ss': screplay.get('description'),
+                        'vol': volume_name})
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+
+            # Life is good.  Let the world know what we've done.
+            LOG.info(_LI('manage_existing_snapshot: snapshot %(exist)s on '
+                         'volume %(volume)s has been renamed to %(id)s and is '
+                         'now managed by Cinder.'),
+                     {'exist': screplay.get('description'),
+                      'volume': volume_name,
+                      'id': snapshot_id})
+            return {'provider_id': screplay['createVolume']['instanceId']}
+
+    # NOTE: Can't use abstractmethod before all drivers implement it
+    def manage_existing_snapshot_get_size(self, snapshot, existing_ref):
+        """Return size of snapshot to be managed by manage_existing.
+
+        When calculating the size, round up to the next GB.
+        """
+        volume_name = snapshot.get('volume_id')
+        with self._client.open_connection() as api:
+            screplay = self._get_unmanaged_replay(api, volume_name,
+                                                  existing_ref)
+            sz, rem = dell_storagecenter_api.StorageCenterApi.size_to_gb(
+                screplay['size'])
+            if rem > 0:
+                raise exception.VolumeBackendAPIException(
+                    data=_('Volume size must be a multiple of 1 GB.'))
+            return sz
+
+    # NOTE: Can't use abstractmethod before all drivers implement it
+    def unmanage_snapshot(self, snapshot):
+        """Removes the specified snapshot from Cinder management.
+
+        Does not delete the underlying backend storage object.
+
+        NOTE: We do set the expire countdown to 1 day. Once a snapshot is
+              unmanaged it will expire 24 hours later.
+        """
+        with self._client.open_connection() as api:
+            snapshot_id = snapshot.get('id')
+            # provider_id is the snapshot's parent volume's instanceId.
+            provider_id = snapshot.get('provider_id')
+            volume_name = snapshot.get('volume_id')
+            # Find our volume.
+            scvolume = api.find_volume(volume_name, provider_id)
+            if not scvolume:
+                # Didn't find it.
+                msg = (_('unmanage_snapshot: Cannot find volume id %s')
+                       % volume_name)
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+            # Find our replay.
+            screplay = api.find_replay(scvolume, snapshot_id)
+            if not screplay:
+                # Didn't find it. Reference must be invalid.
+                msg = (_('unmanage_snapshot: Cannot find snapshot named %s')
+                       % snapshot_id)
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+            # Free our snapshot.
+            api.unmanage_replay(screplay)
+            # Do not check our result.

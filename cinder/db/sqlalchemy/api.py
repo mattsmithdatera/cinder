@@ -84,7 +84,7 @@ def _create_facade_lazily():
             # which requires db.sqlalchemy.api, which requires service which
             # requires objects.base
             CONF.import_group("profiler", "cinder.service")
-            if CONF.profiler.profiler_enabled:
+            if CONF.profiler.enabled:
                 if CONF.profiler.trace_sqlalchemy:
                     osprofiler_sqlalchemy.add_tracing(sqlalchemy,
                                                       _FACADE.get_engine(),
@@ -438,7 +438,8 @@ def service_get_by_host_and_topic(context, host, topic):
         filter_by(topic=topic).\
         first()
     if not result:
-        raise exception.ServiceNotFound(service_id=None)
+        raise exception.ServiceNotFound(service_id=topic,
+                                        host=host)
     return result
 
 
@@ -453,7 +454,8 @@ def service_get_by_args(context, host, binary):
         if host == result['host']:
             return result
 
-    raise exception.HostBinaryNotFound(host=host, binary=binary)
+    raise exception.ServiceNotFound(service_id=binary,
+                                    host=host)
 
 
 @require_admin_context
@@ -824,6 +826,7 @@ def _get_quota_usages(context, session, project_id):
                        read_deleted="no",
                        session=session).\
         filter_by(project_id=project_id).\
+        order_by(models.QuotaUsage.id.asc()).\
         with_lockmode('update').\
         all()
     return {row.resource: row for row in rows}
@@ -834,6 +837,7 @@ def _get_quota_usages_by_resource(context, session, resource):
                        deleted="no",
                        session=session).\
         filter_by(resource=resource).\
+        order_by(models.QuotaUsage.id.asc()).\
         with_lockmode('update').\
         all()
     return rows
@@ -3662,7 +3666,9 @@ def volume_glance_metadata_delete_by_snapshot(context, snapshot_id):
 
 @require_context
 def backup_get(context, backup_id, read_deleted=None, project_only=True):
-    return _backup_get(context, backup_id)
+    return _backup_get(context, backup_id,
+                       read_deleted=read_deleted,
+                       project_only=project_only)
 
 
 def _backup_get(context, backup_id, session=None, read_deleted=None,
@@ -4013,11 +4019,7 @@ def consistencygroup_get_all(context, filters=None, marker=None, limit=None,
                       paired with corresponding item in sort_dirs
     :param sort_dirs: list of directions in which results should be sorted,
                       paired with corresponding item in sort_keys
-    :param filters: dictionary of filters; values that are in lists, tuples,
-                    or sets cause an 'IN' operation, while exact matching
-                    is used for other values, see
-                    _process_consistencygroups_filters function for more
-                    information
+    :param filters: Filters for the query in the form of key/value.
     :returns: list of matching consistency groups
     """
     return _consistencygroup_get_all(context, filters, marker, limit, offset,
@@ -4042,11 +4044,7 @@ def consistencygroup_get_all_by_project(context, project_id, filters=None,
                       paired with corresponding item in sort_dirs
     :param sort_dirs: list of directions in which results should be sorted,
                       paired with corresponding item in sort_keys
-    :param filters: dictionary of filters; values that are in lists, tuples,
-                    or sets cause an 'IN' operation, while exact matching
-                    is used for other values, see
-                    _process_consistencygroups_filters function for more
-                    information
+    :param filters: Filters for the query in the form of key/value.
     :returns: list of matching consistency groups
     """
     authorize_project_context(context, project_id)
@@ -4259,14 +4257,85 @@ def purge_deleted_rows(context, age_in_days):
                 result = session.execute(
                     t.delete()
                     .where(t.c.deleted_at < deleted_age))
-        except db_exc.DBReferenceError:
-            LOG.exception(_LE('DBError detected when purging from '
-                              'table=%(table)s'), {'table': table})
+        except db_exc.DBReferenceError as ex:
+            LOG.error(_LE('DBError detected when purging from '
+                          '%(tablename)s: %(error)s.'),
+                      {'tablename': table, 'error': six.text_type(ex)})
             raise
 
         rows_purged = result.rowcount
         LOG.info(_LI("Deleted %(row)d rows from table=%(table)s"),
                  {'row': rows_purged, 'table': table})
+
+
+###############################
+
+
+def _translate_messages(messages):
+    return [_translate_message(message) for message in messages]
+
+
+def _translate_message(message):
+    """Translate the Message model to a dict."""
+    return {
+        'id': message['id'],
+        'project_id': message['project_id'],
+        'request_id': message['request_id'],
+        'resource_type': message['resource_type'],
+        'resource_uuid': message.get('resource_uuid'),
+        'event_id': message['event_id'],
+        'message_level': message['message_level'],
+        'created_at': message['created_at'],
+        'expires_at': message.get('expires_at'),
+    }
+
+
+@require_context
+def message_get(context, message_id):
+    query = model_query(context,
+                        models.Message,
+                        read_deleted="no",
+                        project_only="yes")
+    result = query.filter_by(id=message_id).first()
+    if not result:
+        raise exception.MessageNotFound(message_id=message_id)
+    return _translate_message(result)
+
+
+@require_context
+def message_get_all(context):
+    """Fetch all messages for the contexts project."""
+    messages = models.Message
+    query = (model_query(context,
+                         messages,
+                         read_deleted="no",
+                         project_only="yes"))
+    results = query.all()
+    return _translate_messages(results)
+
+
+@require_context
+def message_create(context, values):
+    message_ref = models.Message()
+    if not values.get('id'):
+        values['id'] = str(uuid.uuid4())
+    message_ref.update(values)
+
+    session = get_session()
+    with session.begin():
+        session.add(message_ref)
+
+
+@require_admin_context
+def message_destroy(context, message):
+    session = get_session()
+    now = timeutils.utcnow()
+    with session.begin():
+        (model_query(context, models.Message, session=session).
+            filter_by(id=message.get('id')).
+            update({'deleted': True,
+                    'deleted_at': now,
+                    'updated_at': literal_column('updated_at')}))
 
 
 ###############################

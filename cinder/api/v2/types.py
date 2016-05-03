@@ -21,39 +21,10 @@ from webob import exc
 from cinder.api import common
 from cinder.api.openstack import wsgi
 from cinder.api.v2.views import types as views_types
-from cinder.api import xmlutil
-from cinder import context as ctx
 from cinder import exception
 from cinder.i18n import _
 from cinder import utils
 from cinder.volume import volume_types
-
-import cinder.policy
-
-
-def make_voltype(elem):
-    elem.set('id')
-    elem.set('name')
-    elem.set('description')
-    elem.set('qos_specs_id')
-    extra_specs = xmlutil.make_flat_dict('extra_specs', selector='extra_specs')
-    elem.append(extra_specs)
-
-
-class VolumeTypeTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('volume_type', selector='volume_type')
-        make_voltype(root)
-        return xmlutil.MasterTemplate(root, 1)
-
-
-class VolumeTypesTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('volume_types')
-        elem = xmlutil.SubTemplateElement(root, 'volume_type',
-                                          selector='volume_types')
-        make_voltype(elem)
-        return xmlutil.MasterTemplate(root, 1)
 
 
 class VolumeTypesController(wsgi.Controller):
@@ -61,32 +32,15 @@ class VolumeTypesController(wsgi.Controller):
 
     _view_builder_class = views_types.ViewBuilder
 
-    def _validate_policy(self, context):
-        target = {
-            'project_id': context.project_id,
-            'user_id': context.user_id,
-        }
-        try:
-            action = 'volume_extension:access_types_extra_specs'
-            cinder.policy.enforce(context, action, target)
-            return True
-        except Exception:
-            return False
-
-    @wsgi.serializers(xml=VolumeTypesTemplate)
     def index(self, req):
         """Returns the list of volume types."""
         limited_types = self._get_volume_types(req)
         req.cache_resource(limited_types, name='types')
         return self._view_builder.index(req, limited_types)
 
-    @wsgi.serializers(xml=VolumeTypeTemplate)
     def show(self, req, id):
         """Return a single volume type item."""
         context = req.environ['cinder.context']
-
-        if not context.is_admin and self._validate_policy(context):
-            context = ctx.get_admin_context()
 
         # get default volume type
         if id is not None and id == 'default':
@@ -134,8 +88,6 @@ class VolumeTypesController(wsgi.Controller):
         # to filters.
         filters = {}
         context = req.environ['cinder.context']
-        if not context.is_admin and self._validate_policy(context):
-            context = ctx.get_admin_context()
         if context.is_admin:
             # Only admin has query access to all volume types
             filters['is_public'] = self._parse_is_public(
