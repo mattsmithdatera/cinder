@@ -1,25 +1,28 @@
 ======
-CINDER
+DATERA CINDER REPOSITORY
 ======
-
-You have come across a storage service for an open cloud computing service.
-It has identified itself as `Cinder`. It was abstracted from the Nova project.
-
-* Wiki: http://wiki.openstack.org/Cinder
-* Developer docs: http://docs.openstack.org/developer/cinder
-
-Getting Started
----------------
-
-If you'd like to run from the master branch, you can clone the git repo:
-
-    git clone https://git.openstack.org/openstack/cinder.git
-
-For developer information please see
-`HACKING.rst <https://git.openstack.org/cgit/openstack/cinder/plain/HACKING.rst>`_
-
-You can raise bugs here http://bugs.launchpad.net/cinder
-
-Python client
--------------
-https://git.openstack.org/cgit/openstack/python-cinderclient
++---------------------+--------------------+----------------+------------------------------------+-----------------------------------+-------------------------------------------------------------------------------------------------+
+| OpenStack Release   | Driver Branch Name | Driver Version | Additional capabilities introduced | Supported Datera Product Versions | Driver URL                                                                                      |
++=====================+====================+================+====================================+===================================+=================================================================================================+
+| Newton (Unreleased) | newton-v2.1        | 2.1            | Multipathing, ACL                  | 1.0, 1.1                          | https://raw.githubusercontent.com/Datera/cinder/newton-v2.1/cinder/volume/drivers/datera.py     |
++---------------------+--------------------+----------------+------------------------------------+-----------------------------------+-------------------------------------------------------------------------------------------------+
+| Mitaka              | mitaka-v2          | 2.0            | Baseline driver                    | 1.0, 1.1                          | https://raw.githubusercontent.com/Datera/cinder/mitaka-v2/cinder/volume/drivers/datera.py       |
++---------------------+--------------------+----------------+------------------------------------+-----------------------------------+-------------------------------------------------------------------------------------------------+
+|                     | mitaka-v2.1        | 2.1            | Multipathing, ACL                  | 1.0?, 1.1                         | https://raw.githubusercontent.com/Datera/cinder/mitaka-v2.1/cinder/volume/drivers/datera.py     |
++---------------------+--------------------+----------------+------------------------------------+-----------------------------------+-------------------------------------------------------------------------------------------------+
+| Liberty             | liberty-v2         | 2.0            | Baseline driver                    | 1.0, 1.1                          | https://raw.githubusercontent.com/Datera/cinder/liberty-v2/cinder/volume/drivers/datera.py      |
++---------------------+--------------------+----------------+------------------------------------+-----------------------------------+-------------------------------------------------------------------------------------------------+
+|                     | liberty-v2.1       | 2.1            | Multipathing, ACL                  | 1.0?, 1.1                         | https://raw.githubusercontent.com/Datera/cinder/liberty-v2.1/cinder/volume/drivers/datera.py    |
++---------------------+--------------------+----------------+------------------------------------+-----------------------------------+-------------------------------------------------------------------------------------------------+
+| Kilo                | kilo-v2            | 2.0            | Baseline driver                    | 1.0, 1.1                          | https://raw.githubusercontent.com/Datera/cinder/kilo-v2/cinder/volume/drivers/datera.py         |
++---------------------+--------------------+----------------+------------------------------------+-----------------------------------+-------------------------------------------------------------------------------------------------+
+|                     | kilo-v2.1          | 2.1            | Multipathing, ACL                  | 1.0?, 1.1                         | https://raw.githubusercontent.com/Datera/cinder/kilo-v2.1/cinder/volume/drivers/datera.py       |
++---------------------+--------------------+----------------+------------------------------------+-----------------------------------+-------------------------------------------------------------------------------------------------+
+| Juno                | juno-v2            | 2.0            | Baseline driver                    | 1.0, 1.1                          | https://raw.githubusercontent.com/Datera/cinder/juno-v2/cinder/volume/drivers/datera.py         |
++---------------------+--------------------+----------------+------------------------------------+-----------------------------------+-------------------------------------------------------------------------------------------------+
+|                     | juno-v2.1          | 2.1            | Multipathing, ACL                  | 1.0, 1.1                          | in progress                                                                                     |
++---------------------+--------------------+----------------+------------------------------------+-----------------------------------+-------------------------------------------------------------------------------------------------+
+| Icehouse            | icehouse-v2        | 2.0            | Baseline driver                    | 1.0, 1.1                          | https://raw.githubusercontent.com/Datera/cinder/icehouse-v2/cinder/volume/drivers/datera.py     |
++---------------------+--------------------+----------------+------------------------------------+-----------------------------------+-------------------------------------------------------------------------------------------------+
+|                     | icehouse-v2.1      | 2.1            | Multipathing, ACL                  | 1.0, 1.1                          | in progress                                                                                     |
++---------------------+--------------------+----------------+------------------------------------+-----------------------------------+-------------------------------------------------------------------------------------------------+
