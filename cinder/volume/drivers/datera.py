@@ -456,7 +456,7 @@ class DateraDriver(san.SanISCSIDriver):
             if not self._check_for_acl(initiator_iqn_path):
                 self._issue_api_request(initiator_iqn_path.lstrip("/"),
                                         method="delete")
-        except IndexError:
+        except (IndexError, exception.NotFound):
             LOG.debug("Did not find any initiator groups for volume: %s",
                       volume)
 
