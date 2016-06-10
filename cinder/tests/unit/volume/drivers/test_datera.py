@@ -189,7 +189,8 @@ class DateraVolumeTestCase(test.TestCase):
         expected = {
             'driver_volume_type': 'iscsi',
             'data': {
-                'target_discovered': False, 'volume_id': 1,
+                'target_discovered': False,
+                'volume_id': self.volume['id'],
                 'target_iqn': ('iqn.2013-05.com.daterainc:c20aba21-6ef6-'
                                '446b-b374-45733b4883ba--ST--storage-1:01:'
                                'sn:34e5b20fbadd3abb'),

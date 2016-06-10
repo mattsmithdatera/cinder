@@ -13,19 +13,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import functools
 import json
 import time
 import uuid
-import functools
-# import re
 
+import ipaddress
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import units
 import requests
 import six
-import ipaddress
 
 from cinder import context
 from cinder import exception
@@ -35,12 +34,9 @@ from cinder.volume.drivers.san import san
 from cinder.volume import qos_specs
 from cinder.volume import volume_types
 
-# import sys
-# import logging
-# logging.basicConfig(level=logging.DEBUG, stream=sys.stdout)
-# LOG = logging.getLogger(__name__)
-LOG = logging.getLogger()
-# LOG.setLevel(logging.DEBUG)
+LOG = logging.getLogger(__name__)
+
+DATERA_SI_SLEEP = 4
 
 d_opts = [
     cfg.StrOpt('datera_api_port',
@@ -312,7 +308,7 @@ class DateraDriver(san.SanISCSIDriver):
         }
         app_inst = self._issue_api_request(url, method='put', body=data)
         storage_instances = app_inst["storage_instances"]
-        si_names = storage_instances.keys()
+        si_names = list(storage_instances.keys())
 
         portal = storage_instances[si_names[0]]['access']['ips'][0] + ':3260'
         iqn = storage_instances[si_names[0]]['access']['iqn']
@@ -334,7 +330,7 @@ class DateraDriver(san.SanISCSIDriver):
                     'target_portals': portals,
                     'target_lun': self._get_lunid(),
                     'target_luns': lunids,
-                    'volume_id': 1,
+                    'volume_id': volume['id'],
                     'discard': False}}
         else:
             return {
@@ -344,7 +340,7 @@ class DateraDriver(san.SanISCSIDriver):
                     'target_iqn': iqn,
                     'target_portal': portal,
                     'target_lun': self._get_lunid(),
-                    'volume_id': 1,
+                    'volume_id': volume['id'],
                     'discard': False}}
 
     def create_export(self, context, volume, connector):
@@ -390,8 +386,8 @@ class DateraDriver(san.SanISCSIDriver):
                                     conflict_ok=True)
             # Create ACL with initiator group as reference for each
             # storage_instance in app_instance
-            # TODO: We need to avoid changing the ACLs if the template already
-            # specifies an ACL policy.
+            # TODO(_alastor_) We need to avoid changing the ACLs if the
+            # template already specifies an ACL policy.
             for si_name in storage_instances.keys():
                 acl_url = (URL_TEMPLATES['si'] + "/{}/acl_policy").format(
                     volume['id'], si_name)
@@ -415,6 +411,10 @@ class DateraDriver(san.SanISCSIDriver):
             except exception.DateraAPIException:
                 # Datera product 1.0 support
                 pass
+        # Some versions of Datera software require more time to make the
+        # ISCSI lun available, but don't report that it's unavailable.  We
+        # can remove this when we deprecate those versions
+        time.sleep(DATERA_SI_SLEEP)
 
     def detach_volume(self, context, volume, attachment=None):
         url = URL_TEMPLATES['ai_inst'].format(volume['id'])
@@ -428,13 +428,13 @@ class DateraDriver(san.SanISCSIDriver):
             msg = _LI("Tried to detach volume %s, but it was not found in the "
                       "Datera cluster. Continuing with detach.")
             LOG.info(msg, volume['id'])
-        # TODO: Make acl cleaning multi-attach aware
+        # TODO(_alastor_) Make acl cleaning multi-attach aware
         self._clean_acl(volume)
 
     def _check_for_acl(self, initiator_path):
-        """ Returns True if an acl is found for initiator_path """
-        # TODO when we get a /initiators/:initiator/acl_policies endpoint
-        # use that instead of this monstrosity
+        """Returns True if an acl is found for initiator_path """
+        # TODO(_alastor_) when we get a /initiators/:initiator/acl_policies
+        # endpoint use that instead of this monstrosity
         initiator_groups = self._issue_api_request("initiator_groups")
         for ig, igdata in initiator_groups.items():
             if initiator_path in igdata['members']:
@@ -580,7 +580,7 @@ class DateraDriver(san.SanISCSIDriver):
         return policies
 
     def _get_ip_pool_for_string_ip(self, ip):
-        """ Takes a string ipaddress and return the ip_pool API object dict """
+        """Takes a string ipaddress and return the ip_pool API object dict """
         pool = 'default'
         ip_obj = ipaddress.ip_address(six.text_type(ip))
         ip_pools = self._issue_api_request("access_network_ip_pools")
@@ -642,7 +642,6 @@ class DateraDriver(san.SanISCSIDriver):
             # Don't raise, because we're expecting a conflict
             pass
         elif response.status_code == 503:
-            # TODO Try again here
             current_retry = 0
             while current_retry <= self.retry_attempts:
                 LOG.debug("Datera 503 response, trying request again")
