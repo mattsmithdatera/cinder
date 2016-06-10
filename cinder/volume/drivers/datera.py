@@ -511,7 +511,6 @@ class DateraDriver(san.SanISCSIDriver):
                 'uuid': str(volume['id']),
                 'name': str(volume['id']),
                 'clone_src': src,
-                # 'access_control_mode': 'allow_all'
             })
         self._issue_api_request(
             URL_TEMPLATES['ai'],
@@ -589,7 +588,7 @@ class DateraDriver(san.SanISCSIDriver):
                 if not adata.get('start_ip'):
                     continue
                 pool_if = ipaddress.ip_interface(
-                    "/".join((adata['start_ip'], str(adata['netmask']))))
+                    "/".join((adata['start_ip'], adata['netmask'])))
                 if ip_obj in pool_if.network:
                     pool = ip_pool
         return self._issue_api_request(
